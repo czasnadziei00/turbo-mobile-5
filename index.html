@@ -159,23 +159,102 @@ function zamknijPopupOCR() {
 }
 
 /* ============================================================
-   2. Inteligentne wykrywanie tickera (bez listy)
+   2. Automatyczne generowanie tickera z nazwy
    ============================================================ */
 
-function wykryjTicker(text) {
+// sprytne wyjątki dla GPW (bez pełnej listy)
+function generujTickerZNazwy(text) {
   const upper = text.toUpperCase();
 
-  // wszystkie potencjalne skróty 2–5 liter
+  // specjalne mapowania (bez konieczności pełnej listy)
+  const mapa = [
+    { pattern: "GRUPA KETY", ticker: "KTY" },
+    { pattern: "GRUPA KĘTY", ticker: "KTY" },
+    { pattern: "KETY",       ticker: "KTY" },
+    { pattern: "KĘTY",       ticker: "KTY" },
+
+    { pattern: "ALLEGRO",    ticker: "ALE" },
+    { pattern: "PKN ORLEN",  ticker: "PKN" },
+    { pattern: "ORLEN",      ticker: "PKN" },
+
+    { pattern: "CD PROJEKT", ticker: "CDR" },
+    { pattern: "CDPROJEKT",  ticker: "CDR" },
+
+    { pattern: "MBANK",      ticker: "MBK" },
+    { pattern: "ASBIS",      ticker: "ASB" },
+    { pattern: "XTB",        ticker: "XTB" },
+    { pattern: "JSW",        ticker: "JSW" }
+  ];
+
+  for (const m of mapa) {
+    if (upper.includes(m.pattern)) return m.ticker;
+  }
+
+  // próba generowania tickera z pierwszej sensownej nazwy
+  // np. "Grupa Kety - 15 - Warsaw..." → bierzemy "Grupa Kety"
+  let nazwaKandydata = null;
+
+  const przed15 = upper.split("- 15")[0]; // przed " - 15"
+  if (przed15 && przed15.includes("-")) {
+    // np. "GRUPA KETY - "
+    nazwaKandydata = przed15.split("-")[0];
+  } else {
+    // fallback: pierwsza część przed " - WARSAW" albo " (GPW)"
+    nazwaKandydata = upper.split("- WARSAW")[0].split("(GPW)")[0];
+  }
+
+  if (!nazwaKandydata) nazwaKandydata = upper;
+
+  // wyciągamy słowa
+  const slowa = nazwaKandydata
+    .replace(/[^A-ZĄĆĘŁŃÓŚŹŻ\s]/g, " ")
+    .split(/\s+/)
+    .filter(s => s.length >= 3);
+
+  const blacklistNazw = new Set([
+    "WARSAW","STOCK","EXCHANGE","GPW","WIG","INDEX","FUTURES",
+    "KONTRAKTY","CFD","RSI","WOLUMEN","VOLUME","MA","EMA","DEMA"
+  ]);
+
+  for (let s of slowa) {
+    if (blacklistNazw.has(s)) continue;
+
+    // jeśli słowo ma 3 litery → użyj jako ticker
+    if (s.length === 3) return s;
+
+    // jeśli słowo ma >3 litery → weź pierwsze 3
+    if (s.length > 3) return s.slice(0,3);
+  }
+
+  return null;
+}
+
+// stary mechanizm: skróty 2–5 liter, z blacklistą
+function wykryjTickerZeSkrotow(text) {
+  const upper = text.toUpperCase();
   const matches = upper.match(/\b[A-Z]{2,5}\b/g) || [];
 
   const blacklist = new Set([
     "GPW","W","MA","RSI","VOL","WOL","EXP","EMA","OPEN","HIGH","LOW","CLOSE",
-    "O","H","L","C","MIN","MAX","BUY","SELL","LONG","SHORT","STOP","LOSS"
+    "O","H","L","C","MIN","MAX","BUY","SELL","LONG","SHORT","STOP","LOSS",
+    "TF","UTC","LOG","PT","ST","ND","RD","TH","AUTO"
   ]);
 
   for (const m of matches) {
     if (!blacklist.has(m)) return m;
   }
+
+  return null;
+}
+
+function wykryjTicker(text) {
+  // 1) najpierw spróbuj z nazwy spółki
+  const zNazwy = generujTickerZNazwy(text);
+  if (zNazwy) return zNazwy;
+
+  // 2) potem fallback na skróty
+  const zeSkrotu = wykryjTickerZeSkrotow(text);
+  if (zeSkrotu) return zeSkrotu;
 
   return "UNKNOWN";
 }
