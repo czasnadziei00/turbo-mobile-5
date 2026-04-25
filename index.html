@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>TURBO OCR 2.0 LITE — XTB Edition</title>
+  <title>TURBO OCR 2.0 REAL — XTB Edition</title>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 
@@ -41,7 +41,7 @@
   onchange="wczytajOCRZPlikow(event)"
 >
 
-<h1>TURBO OCR 2.0 LITE — XTB Edition</h1>
+<h1>TURBO OCR 2.0 REAL — XTB Edition</h1>
 
 <table id="main-table">
   <thead>
@@ -86,7 +86,47 @@
   <button onclick="zatwierdzOCR()">Użyj danych</button>
   <button onclick="zamknijPopupOCR()">Anuluj</button>
 </div>
+
 <script>
+/* ============================================================
+   PREPROCESSING OBRAZU (REAL)
+   ============================================================ */
+
+async function preprocessImage(dataUrl) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+
+      canvas.width = img.width;
+      canvas.height = img.height;
+
+      ctx.drawImage(img, 0, 0);
+
+      let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let data = imageData.data;
+
+      // grayscale
+      for (let i = 0; i < data.length; i += 4) {
+        const avg = (data[i] + data[i+1] + data[i+2]) / 3;
+        data[i] = data[i+1] = data[i+2] = avg;
+      }
+
+      // threshold (binaryzacja)
+      for (let i = 0; i < data.length; i += 4) {
+        const v = data[i] > 140 ? 255 : 0;
+        data[i] = data[i+1] = data[i+2] = v;
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+
+      resolve(canvas.toDataURL());
+    };
+    img.src = dataUrl;
+  });
+}
+
 /* ============================================================
    OCR — wczytywanie
    ============================================================ */
@@ -107,7 +147,9 @@ async function wczytajOCRZPlikow(event) {
 }
 
 async function startOCR(dataUrl) {
-  const wynik = await Tesseract.recognize(dataUrl, 'eng');
+  const clean = await preprocessImage(dataUrl);
+
+  const wynik = await Tesseract.recognize(clean, 'eng');
   const text = wynik.data.text || "";
 
   ostatniTekstOCR = text;
@@ -132,10 +174,8 @@ function zamknijPopupOCR() {
 function normalizujLiczbe(x) {
   if (!x) return null;
 
-  // usuń śmieci typu "O1 129,00" → "1129,00"
   x = x.replace(/[^\d,.\s]/g, "").replace(/\s+/g, "");
 
-  // jeśli brak przecinka/kropki → wstaw przed 2 ostatnie cyfry
   if (!x.includes(",") && !x.includes(".") && x.length > 3) {
     x = x.slice(0, -2) + "," + x.slice(-2);
   }
@@ -206,7 +246,7 @@ function wykryjTicker(text) {
 }
 
 /* ============================================================
-   PARSER XTB — TURBO OCR 2.0 LITE
+   PARSER XTB — TURBO OCR 2.0 REAL
    ============================================================ */
 
 function przetworzTekstOCR(t) {
@@ -214,30 +254,79 @@ function przetworzTekstOCR(t) {
 
   const ticker = wykryjTicker(t);
 
-  // O/H/L/C
   const O = normalizujLiczbe((t.match(/O\s*([0-9\s.,]+)/i) || [null,null])[1]);
   const H = normalizujLiczbe((t.match(/H\s*([0-9\s.,]+)/i) || [null,null])[1]);
   const L = normalizujLiczbe((t.match(/L\s*([0-9\s.,]+)/i) || [null,null])[1]);
   const C = normalizujLiczbe((t.match(/C\s*([0-9\s.,]+)/i) || [null,null])[1]);
 
-  // MA20
   const MA20 = normalizujLiczbe((t.match(/MA\s*20[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
 
-  // DEMA9 (Podwójna Średnia Krocząca)
   let DEMA9 = null;
   const demaBlock = t.match(/PODWÓJNA\s+ŚREDNIA[^0-9]*([0-9\s.,]+)\s+([0-9\s.,]+)/i);
   if (demaBlock) DEMA9 = normalizujLiczbe(demaBlock[1]);
 
-  // RSI
   const RSI = normalizujLiczbe((t.match(/RSI[-\s]*14[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
 
-  // Wolumen
   const VOL = normalizujLiczbe((t.match(/WOLUMEN[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
 
   dodajLubAktualizujWiersz({ ticker, O, H, L, C, MA20, DEMA9, VOL, RVOL:null });
 }
-</script>
-<script>
+
+/* ============================================================
+   TWORZENIE / AKTUALIZACJA WIERSZA
+   ============================================================ */
+
+function dodajLubAktualizujWiersz(d) {
+  const tabela = document.getElementById("main-table");
+  let w = null;
+
+  for (let i = 1; i < tabela.rows.length; i++) {
+    if (tabela.rows[i].cells[1].innerText === d.ticker) {
+      w = tabela.rows[i];
+      break;
+    }
+  }
+
+  if (!w) {
+    w = tabela.insertRow(-1);
+
+    w.insertCell(0).innerText = "📊";
+    w.insertCell(1).innerText = d.ticker;
+
+    w.insertCell(2).innerHTML = `<input class="price-input" oninput="aktualizujSygnał(this.closest('tr'))">`;
+    w.insertCell(3).innerHTML = `<input class="entry-input" oninput="sortujPoSygnale()">`;
+
+    w.insertCell(4).innerText = "CZEKAJ";
+    w.insertCell(5).innerText = "—";
+    w.insertCell(6).innerText = "—";
+    w.insertCell(7).innerText = "—";
+    w.insertCell(8).innerText = "—";
+
+    w.insertCell(9).innerHTML  = `<button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button>`;
+    w.insertCell(10).innerHTML = `<button onclick="document.getElementById('ocr-file-input').click()">📎</button>`;
+    w.insertCell(11).innerHTML = `<button onclick="usunWiersz(this)">🗑 Usuń</button>`;
+  }
+
+  if (d.C) w.cells[2].querySelector("input").value = d.C.toFixed(3);
+
+  if (d.H && d.L) {
+    const dol = d.L + (d.H - d.L) * 0.20;
+    const gor = d.L + (d.H - d.L) * 0.35;
+    w.cells[5].innerText = dol.toFixed(3) + "–" + gor.toFixed(3);
+  }
+
+  if (d.O)     w.dataset.O     = d.O;
+  if (d.H)     w.dataset.H     = d.H;
+  if (d.L)     w.dataset.L     = d.L;
+  if (d.C)     w.dataset.C     = d.C;
+  if (d.MA20)  w.dataset.MA20  = d.MA20;
+  if (d.DEMA9) w.dataset.DEMA9 = d.DEMA9;
+  if (d.VOL)   w.dataset.VOL   = d.VOL;
+
+  aktualizujSygnał(w);
+  sortujPoSygnale();
+}
+
 /* ============================================================
    SYGNAŁ 4.5
    ============================================================ */
@@ -380,7 +469,6 @@ function usunWiersz(btn) {
   const tr = btn.closest("tr");
   if (tr) tr.remove();
 }
-
 </script>
 
 </body>
