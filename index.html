@@ -106,7 +106,6 @@
   <button onclick="zatwierdzOCR()">Użyj danych</button>
   <button onclick="zamknijPopupOCR()">Anuluj</button>
 </div>
-
 <script>
 /* ============================================================
    1. OCR — wczytywanie screenów + popup
@@ -133,10 +132,6 @@ async function startOCR(dataUrl) {
   const wynik = await Tesseract.recognize(dataUrl, 'eng');
   const text = wynik.data.text || "";
 
-  console.log("=== OCR RAW TEXT ===");
-  console.log(text);
-  console.log("====================");
-
   ostatniTekstOCR = text;
 
   const pre = document.getElementById("popup-ocr-raw");
@@ -159,77 +154,56 @@ function zamknijPopupOCR() {
 }
 
 /* ============================================================
-   2. Automatyczne generowanie tickera z nazwy
+   2. AUTOMATYCZNE WYKRYWANIE NAZWY SPÓŁKI (wersja odpornościowa)
    ============================================================ */
 
-// sprytne wyjątki dla GPW (bez pełnej listy)
 function generujTickerZNazwy(text) {
-  const upper = text.toUpperCase();
+  const upper = text
+    .toUpperCase()
+    .replace(/[^A-Z0-9ĄĆĘŁŃÓŚŹŻ\s]/g, " ")
+    .replace(/\s+/g, " ");
 
-  // specjalne mapowania (bez konieczności pełnej listy)
-  const mapa = [
-    { pattern: "GRUPA KETY", ticker: "KTY" },
-    { pattern: "GRUPA KĘTY", ticker: "KTY" },
-    { pattern: "KETY",       ticker: "KTY" },
-    { pattern: "KĘTY",       ticker: "KTY" },
-
-    { pattern: "ALLEGRO",    ticker: "ALE" },
-    { pattern: "PKN ORLEN",  ticker: "PKN" },
-    { pattern: "ORLEN",      ticker: "PKN" },
-
-    { pattern: "CD PROJEKT", ticker: "CDR" },
-    { pattern: "CDPROJEKT",  ticker: "CDR" },
-
-    { pattern: "MBANK",      ticker: "MBK" },
-    { pattern: "ASBIS",      ticker: "ASB" },
-    { pattern: "XTB",        ticker: "XTB" },
-    { pattern: "JSW",        ticker: "JSW" }
+  // 1) Specjalne mapowania (działają nawet przy literówkach OCR)
+  const mapowania = [
+    { nazwy: ["GRUPA KETY", "GRUPA KĘTY", "KETY", "KĘTY"], ticker: "KTY" },
+    { nazwy: ["ALLEGRO"], ticker: "ALE" },
+    { nazwy: ["PKN ORLEN", "ORLEN"], ticker: "PKN" },
+    { nazwy: ["CD PROJEKT", "CDPROJEKT"], ticker: "CDR" },
+    { nazwy: ["MBANK"], ticker: "MBK" },
+    { nazwy: ["ASBIS"], ticker: "ASB" },
+    { nazwy: ["XTB"], ticker: "XTB" },
+    { nazwy: ["JSW"], ticker: "JSW" }
   ];
 
-  for (const m of mapa) {
-    if (upper.includes(m.pattern)) return m.ticker;
+  for (const m of mapowania) {
+    for (const n of m.nazwy) {
+      if (upper.includes(n)) return m.ticker;
+    }
   }
 
-  // próba generowania tickera z pierwszej sensownej nazwy
-  // np. "Grupa Kety - 15 - Warsaw..." → bierzemy "Grupa Kety"
-  let nazwaKandydata = null;
+  // 2) Automatyczne generowanie tickera z NAZWY (bez mapy)
+  const slowa = upper.split(" ").filter(s => s.length >= 3);
 
-  const przed15 = upper.split("- 15")[0]; // przed " - 15"
-  if (przed15 && przed15.includes("-")) {
-    // np. "GRUPA KETY - "
-    nazwaKandydata = przed15.split("-")[0];
-  } else {
-    // fallback: pierwsza część przed " - WARSAW" albo " (GPW)"
-    nazwaKandydata = upper.split("- WARSAW")[0].split("(GPW)")[0];
-  }
-
-  if (!nazwaKandydata) nazwaKandydata = upper;
-
-  // wyciągamy słowa
-  const slowa = nazwaKandydata
-    .replace(/[^A-ZĄĆĘŁŃÓŚŹŻ\s]/g, " ")
-    .split(/\s+/)
-    .filter(s => s.length >= 3);
-
-  const blacklistNazw = new Set([
+  const blacklist = new Set([
     "WARSAW","STOCK","EXCHANGE","GPW","WIG","INDEX","FUTURES",
-    "KONTRAKTY","CFD","RSI","WOLUMEN","VOLUME","MA","EMA","DEMA"
+    "KONTRAKTY","CFD","RSI","WOLUMEN","VOLUME","MA","EMA","DEMA",
+    "OPEN","HIGH","LOW","CLOSE","AUTO","UTC"
   ]);
 
   for (let s of slowa) {
-    if (blacklistNazw.has(s)) continue;
+    if (blacklist.has(s)) continue;
 
-    // jeśli słowo ma 3 litery → użyj jako ticker
     if (s.length === 3) return s;
-
-    // jeśli słowo ma >3 litery → weź pierwsze 3
     if (s.length > 3) return s.slice(0,3);
   }
 
   return null;
 }
 
-// stary mechanizm: skróty 2–5 liter, z blacklistą
+/* ============================================================
+   3. FALLBACK — skróty 2–5 liter
+   ============================================================ */
+
 function wykryjTickerZeSkrotow(text) {
   const upper = text.toUpperCase();
   const matches = upper.match(/\b[A-Z]{2,5}\b/g) || [];
@@ -247,12 +221,14 @@ function wykryjTickerZeSkrotow(text) {
   return null;
 }
 
+/* ============================================================
+   4. GŁÓWNA FUNKCJA — wykrywanie tickera
+   ============================================================ */
+
 function wykryjTicker(text) {
-  // 1) najpierw spróbuj z nazwy spółki
   const zNazwy = generujTickerZNazwy(text);
   if (zNazwy) return zNazwy;
 
-  // 2) potem fallback na skróty
   const zeSkrotu = wykryjTickerZeSkrotow(text);
   if (zeSkrotu) return zeSkrotu;
 
@@ -260,7 +236,7 @@ function wykryjTicker(text) {
 }
 
 /* ============================================================
-   3. PARSER OCR (pod polskie / TV screeny)
+   5. PARSER OCR (O/H/L/C, MA20, DEMA9, wolumen)
    ============================================================ */
 
 function normalizujLiczbe(x) {
@@ -288,66 +264,10 @@ function przetworzTekstOCR(t) {
 
   dodajLubAktualizujWiersz({ ticker, O, H, L, C, MA20, DEMA9, VOL, RVOL });
 }
-
+</script>
+<script>
 /* ============================================================
-   4. TWORZENIE / AKTUALIZACJA WIERSZA
-   ============================================================ */
-
-function dodajLubAktualizujWiersz(d) {
-  const tabela = document.getElementById("main-table");
-  let w = null;
-
-  for (let i = 1; i < tabela.rows.length; i++) {
-    if (tabela.rows[i].cells[1].innerText === d.ticker) {
-      w = tabela.rows[i];
-      break;
-    }
-  }
-
-  if (!w) {
-    w = tabela.insertRow(-1);
-
-    w.insertCell(0).innerText = "📊";
-    w.insertCell(1).innerText = d.ticker;
-
-    w.insertCell(2).innerHTML = `<input class="price-input" oninput="aktualizujSygnał(this.closest('tr'))">`;
-    w.insertCell(3).innerHTML = `<input class="entry-input" oninput="sortujPoSygnale()">`;
-
-    w.insertCell(4).innerText = "CZEKAJ";
-    w.insertCell(5).innerText = "—";
-    w.insertCell(6).innerText = "—";
-    w.insertCell(7).innerText = "—";
-    w.insertCell(8).innerText = "—";
-
-    w.insertCell(9).innerHTML  = `<button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button>`;
-    w.insertCell(10).innerHTML = `<button onclick="document.getElementById('ocr-file-input').click()">📎</button>`;
-    w.insertCell(11).innerHTML = `<button onclick="usunWiersz(this)">🗑 Usuń</button>`;
-  }
-
-  if (d.C) w.cells[2].querySelector("input").value = d.C.toFixed(3);
-
-  if (d.H && d.L) {
-    const dol = d.L + (d.H - d.L) * 0.20;
-    const gor = d.L + (d.H - d.L) * 0.35;
-    w.cells[5].innerText = dol.toFixed(3) + "–" + gor.toFixed(3);
-  }
-
-  if (d.O)     w.dataset.O     = d.O;
-  if (d.H)     w.dataset.H     = d.H;
-  if (d.L)     w.dataset.L     = d.L;
-  if (d.C)     w.dataset.C     = d.C;
-  if (d.MA20)  w.dataset.MA20  = d.MA20;
-  if (d.DEMA9) w.dataset.DEMA9 = d.DEMA9;
-  if (d.VOL)   w.dataset.VOL   = d.VOL;
-  if (d.RVOL)  w.dataset.RVOL  = d.RVOL;
-
-  aktualizujSygnał(w);
-  sortujPoSygnale();
-  generujAnalizePRO(w);
-}
-
-/* ============================================================
-   5. SYGNAŁ 4.5
+   6. SYGNAŁ 4.5
    ============================================================ */
 
 function aktualizujSygnał(w) {
@@ -409,7 +329,7 @@ function kolorujSygnal(w, s) {
 }
 
 /* ============================================================
-   6. ANALIZA PRO 4.5
+   7. ANALIZA PRO 4.5
    ============================================================ */
 
 function generujAnalizePRO(w) {
@@ -438,8 +358,7 @@ function generujKomentarz45(w) {
   else if (C > O)           struktura = "KOREKTA WZROSTOWA";
   else if (C < O)           struktura = "KOREKTA SPADKOWA";
 
-  let momentum = "...";
-  if (DEMA9) momentum = cena > DEMA9 ? "MOCNE" : "SŁABE";
+  let momentum = DEMA9 ? (cena > DEMA9 ? "MOCNE" : "SŁABE") : "...";
 
   let srednie = "...";
   if (MA20 && DEMA9) {
@@ -454,12 +373,7 @@ function generujKomentarz45(w) {
   else                  wol = "SŁABY";
 
   const uzasadnienie = interpretacjaPRO(
-    sygnal,
-    struktura,
-    srednie,
-    wol,
-    momentum,
-    C > O ? "zielona" : "czerwona"
+    sygnal, struktura, srednie, wol, momentum, C > O ? "zielona" : "czerwona"
   );
 
   let bias = "...";
@@ -467,67 +381,43 @@ function generujKomentarz45(w) {
   else if (srednie.includes("DOWN") && momentum === "SŁABE") bias = "DOWN";
   else                                                       bias = "NEUTRAL";
 
-  const buy   = "...";
-  const reset = "...";
-
   return `
 1. STRUKTURA<br>
 - świeca: O=${O}, H=${H}, L=${L}, C=${C}<br>
-- kierunek: ${C > O ? "zielona" : "czerwona"}<br>
-➡️ STRUKTURA = ${struktura}<br><br>
+➡️ ${struktura}<br><br>
 
 2. MOMENTUM<br>
-- DEMA9: ${DEMA9 || "brak"}<br>
-- siła: ${momentum}<br>
-➡️ MOMENTUM = ${momentum}<br><br>
+➡️ ${momentum}<br><br>
 
 3. ŚREDNIE<br>
-- MA20: ${MA20 || "brak"}<br>
-- cena vs średnie: ${srednie}<br>
-➡️ ŚREDNIE = ${srednie}<br><br>
+➡️ ${srednie}<br><br>
 
 4. WOLUMEN<br>
-- wolumen: ${VOL || "brak"}<br>
-- RVOL: ${RVOL || "brak"}<br>
-➡️ WOLUMEN = ${wol}<br><br>
+➡️ ${wol}<br><br>
 
 5. SYGNAŁ SYSTEMU 4.5<br>
-- struktura → ${struktura}<br>
-- momentum → ${momentum}<br>
-- średnie → ${srednie}<br>
-- wolumen → ${wol}<br>
-- świeca → ${C > O ? "zielona" : "czerwona"}<br>
-➡️ 4.5: SYGNAŁ = ${sygnal}<br>
-➡️ 4.5: UZASADNIENIE = ${uzasadnienie}<br><br>
+➡️ ${sygnal}<br>
+➡️ ${uzasadnienie}<br><br>
 
-6. KIERUNEK / BIAS<br>
-- ${bias}<br><br>
+6. BIAS<br>
+➡️ ${bias}<br><br>
 
-7. POZIOM AKTYWACJI<br>
-- BUY: ${buy}<br>
-- RESET: ${reset}<br>
-- WIDEŁKI BUY: ${widelki}<br>
+7. WIDEŁKI BUY<br>
+➡️ ${widelki}<br>
 `;
 }
 
 function interpretacjaPRO(sygnal, struktura, srednie, wol, momentum, swieca) {
-  if (sygnal === "BUY") {
-    return "Cena w widełkach, struktura i momentum sprzyjają wejściu. Jeśli średnie i wolumen nie są przeciwne — setup A/B.";
-  }
-  if (sygnal === "CZEKAJ DO") {
-    return "Cena poniżej strefy — czekaj na wejście w widełki. Struktura i momentum tylko w tle, bez aktywacji.";
-  }
-  if (sygnal === "RESET") {
-    return "Cena zbyt nisko / po wybiciu — ryzyko fałszywego ruchu. Lepiej poczekać na nową świecę i reset układu.";
-  }
-  if (sygnal === "UWAGA RESET") {
-    return "Strefa zagrożenia — układ traci przewagę, obserwuj świecę i wolumen, bez agresywnego wejścia.";
-  }
-  return "Brak wyraźnej przewagi — obserwuj świecę, momentum i wolumen, bez agresywnego wejścia.";
+  if (sygnal === "BUY") return "Cena w widełkach, struktura i momentum sprzyjają wejściu.";
+  if (sygnal === "PRAWIE BUY") return "Blisko wejścia — momentum słabe, ale strefa dobra.";
+  if (sygnal === "CZEKAJ DO") return "Cena poniżej strefy — czekaj na wejście.";
+  if (sygnal === "UWAGA RESET") return "Ryzyko wybicia w dół — obserwuj świecę.";
+  if (sygnal === "RESET") return "Układ stracił przewagę — czekaj na nową świecę.";
+  return "Brak przewagi — obserwuj.";
 }
 
 /* ============================================================
-   7. SORTOWANIE
+   8. SORTOWANIE
    ============================================================ */
 
 function sortujPoSygnale() {
@@ -552,7 +442,7 @@ function sortujPoSygnale() {
 }
 
 /* ============================================================
-   8. MIKROFON
+   9. MIKROFON
    ============================================================ */
 
 let recognition = null;
@@ -579,16 +469,10 @@ function uruchomMikrofon(wiersz) {
     const tekst = event.results[0][0].transcript;
     const liczba = tekst.replace(",", ".").match(/[0-9.]+/);
 
-    if (!liczba) {
-      alert("Nie rozpoznano liczby.");
-      return;
-    }
+    if (!liczba) return alert("Nie rozpoznano liczby.");
 
     const cena = parseFloat(liczba[0]);
-    if (isNaN(cena)) {
-      alert("Nie rozpoznano poprawnej liczby.");
-      return;
-    }
+    if (isNaN(cena)) return alert("Niepoprawna liczba.");
 
     aktywnyWiersz.cells[2].querySelector("input").value = cena.toFixed(3);
 
@@ -602,7 +486,7 @@ function uruchomMikrofon(wiersz) {
 }
 
 /* ============================================================
-   9. RESET / USUWANIE / POPUPY
+   10. RESET / USUWANIE / POPUPY
    ============================================================ */
 
 function resetSygnałów() {
@@ -620,33 +504,27 @@ function wyczyscTabele() {
 
 function usunWiersz(btn) {
   const tr = btn.closest("tr");
-  if (!tr) return;
-  tr.parentNode.removeChild(tr);
+  if (tr) tr.remove();
 }
 
 function zamknijPopupAnalizaPRO(){ 
-  const el = document.getElementById("popup-analiza-pro");
-  if (el) el.style.display="none"; 
+  document.getElementById("popup-analiza-pro").style.display="none"; 
 }
 
 function pokazPopupUstawienia(){ 
-  const el = document.getElementById("popup-ustawienia");
-  if (el) el.style.display="block"; 
+  document.getElementById("popup-ustawienia").style.display="block"; 
 }
 
 function zamknijPopupUstawienia(){ 
-  const el = document.getElementById("popup-ustawienia");
-  if (el) el.style.display="none"; 
+  document.getElementById("popup-ustawienia").style.display="none"; 
 }
 
 function pokazPopupReset(){ 
-  const el = document.getElementById("popup-reset");
-  if (el) el.style.display="block"; 
+  document.getElementById("popup-reset").style.display="block"; 
 }
 
 function zamknijPopupReset(){ 
-  const el = document.getElementById("popup-reset");
-  if (el) el.style.display="none"; 
+  document.getElementById("popup-reset").style.display="none"; 
 }
 </script>
 
