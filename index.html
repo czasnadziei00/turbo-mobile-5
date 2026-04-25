@@ -99,7 +99,7 @@
   <button onclick="zamknijPopupReset()">Anuluj</button>
 </div>
 
-<!-- POPUP OCR (wersja B: potwierdzenie) -->
+<!-- POPUP OCR -->
 <div id="popup-ocr" class="popup">
   <h2>OCR — podgląd</h2>
   <pre id="popup-ocr-raw" style="white-space:pre-wrap;font-size:11px;"></pre>
@@ -159,7 +159,29 @@ function zamknijPopupOCR() {
 }
 
 /* ============================================================
-   2. PARSER OCR (pod polskie screeny)
+   2. Inteligentne wykrywanie tickera (bez listy)
+   ============================================================ */
+
+function wykryjTicker(text) {
+  const upper = text.toUpperCase();
+
+  // wszystkie potencjalne skróty 2–5 liter
+  const matches = upper.match(/\b[A-Z]{2,5}\b/g) || [];
+
+  const blacklist = new Set([
+    "GPW","W","MA","RSI","VOL","WOL","EXP","EMA","OPEN","HIGH","LOW","CLOSE",
+    "O","H","L","C","MIN","MAX","BUY","SELL","LONG","SHORT","STOP","LOSS"
+  ]);
+
+  for (const m of matches) {
+    if (!blacklist.has(m)) return m;
+  }
+
+  return "UNKNOWN";
+}
+
+/* ============================================================
+   3. PARSER OCR (pod polskie / TV screeny)
    ============================================================ */
 
 function normalizujLiczbe(x) {
@@ -173,25 +195,23 @@ function normalizujLiczbe(x) {
 function przetworzTekstOCR(t) {
   t = t.replace(/\n/g, " ");
 
-  // ticker — np. ALLEGRO, KGHM, PKNORLEN itp.
-  const ticker = (t.match(/([A-Z]{3,10})\s*/)[1] || "UNKNOWN");
+  const ticker = wykryjTicker(t);
 
   const O = normalizujLiczbe((t.match(/O\s*([0-9.,\s]+)/i) || [null,null])[1]);
   const H = normalizujLiczbe((t.match(/H\s*([0-9.,\s]+)/i) || [null,null])[1]);
   const L = normalizujLiczbe((t.match(/L\s*([0-9.,\s]+)/i) || [null,null])[1]);
   const C = normalizujLiczbe((t.match(/C\s*([0-9.,\s]+)/i) || [null,null])[1]);
 
-  // MA20, DEMA9, VOL, RVOL — przykładowe dopasowania
   const MA20  = normalizujLiczbe((t.match(/MA\s*20[^0-9]*([0-9.,\s]+)/i) || [null,null])[1]);
-  const DEMA9 = normalizujLiczbe((t.match(/(DEMA|Podwójna)\s*Średnia[^0-9]*([0-9.,\s]+)/i) || [null,null])[2]);
-  const VOL   = normalizujLiczbe((t.match(/Wolumen[^0-9]*([0-9.,\s]+)/i) || [null,null])[1]);
+  const DEMA9 = normalizujLiczbe((t.match(/(DEMA|PODWÓJNA)\s*ŚREDNIA[^0-9]*([0-9.,\s]+)/i) || [null,null])[2]);
+  const VOL   = normalizujLiczbe((t.match(/WOLUMEN[^0-9]*([0-9.,\s]+)/i) || [null,null])[1]);
   const RVOL  = normalizujLiczbe((t.match(/RVOL[^0-9]*([0-9.,\s]+)/i) || [null,null])[1]);
 
   dodajLubAktualizujWiersz({ ticker, O, H, L, C, MA20, DEMA9, VOL, RVOL });
 }
 
 /* ============================================================
-   3. TWORZENIE / AKTUALIZACJA WIERSZA
+   4. TWORZENIE / AKTUALIZACJA WIERSZA
    ============================================================ */
 
 function dodajLubAktualizujWiersz(d) {
@@ -248,7 +268,7 @@ function dodajLubAktualizujWiersz(d) {
 }
 
 /* ============================================================
-   4. SYGNAŁ
+   5. SYGNAŁ 4.5
    ============================================================ */
 
 function aktualizujSygnał(w) {
@@ -259,10 +279,7 @@ function aktualizujSygnał(w) {
 
   const [dol, gor] = w.cells[5].innerText.split("–").map(parseFloat);
 
-  const O = parseFloat(w.dataset.O || 0);
-  const H = parseFloat(w.dataset.H || 0);
   const L = parseFloat(w.dataset.L || 0);
-  const C = parseFloat(w.dataset.C || 0);
   const MA20 = parseFloat(w.dataset.MA20 || 0);
   const DEMA9 = parseFloat(w.dataset.DEMA9 || 0);
 
@@ -313,7 +330,7 @@ function kolorujSygnal(w, s) {
 }
 
 /* ============================================================
-   4.5 — KOMENTARZ / ANALIZA PRO 4.5
+   6. ANALIZA PRO 4.5
    ============================================================ */
 
 function generujAnalizePRO(w) {
@@ -431,7 +448,7 @@ function interpretacjaPRO(sygnal, struktura, srednie, wol, momentum, swieca) {
 }
 
 /* ============================================================
-   5. SORTOWANIE
+   7. SORTOWANIE
    ============================================================ */
 
 function sortujPoSygnale() {
@@ -456,7 +473,7 @@ function sortujPoSygnale() {
 }
 
 /* ============================================================
-   6. MIKROFON 4.5 — Web Speech API
+   8. MIKROFON
    ============================================================ */
 
 let recognition = null;
@@ -506,7 +523,7 @@ function uruchomMikrofon(wiersz) {
 }
 
 /* ============================================================
-   7. RESET / USUWANIE / POPUPY
+   9. RESET / USUWANIE / POPUPY
    ============================================================ */
 
 function resetSygnałów() {
