@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TURBO MOBILE 5.0+ OCR</title>
+
+  <!-- Tesseract.js -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+
+  <style>
+    body { font-family: Arial; background:#f6f7fb; margin:20px; }
+    table { width:100%; border-collapse:collapse; background:white; }
+    th, td { padding:8px 10px; border-bottom:1px solid #eee; font-size:13px; }
+    th { background:#fafafa; font-weight:600; }
+    button { padding:6px 8px; cursor:pointer; border-radius:4px; }
+
+    /* Twoje stare kolory (możesz zostawić lub usunąć) */
+    .signal-kup { color:#0a7a3a; font-weight:700; }
+    .signal-reset { color:#b71c1c; font-weight:700; }
+    .signal-czekajdo { color:#b07a00; font-weight:700; }
+    .signal-czekaj { color:#555; font-weight:700; }
+
+    .popup {
+      display:none; position:fixed; z-index:9999;
+      left:50%; top:50%; transform:translate(-50%,-50%);
+      background:white; border:2px solid #222;
+      padding:16px; width:360px; max-height:80vh; overflow:auto;
+    }
+
+    /* NOWE KOLORY SYGNAŁÓW 4.5+ */
+    .signal-buy {
+      color: #0a7a3a;
+      font-weight: 700;
+    }
+
+    .signal-prawiebuy {
+      color: #7ac70c;
+      font-weight: 700;
+    }
+
+    .signal-czekaj {
+      color: #555;
+      font-weight: 700;
+    }
+
+    .signal-czekajdo {
+      color: #d4a000;
+      font-weight: 700;
+    }
+
+    .signal-uwagarese {
+      color: #ff7f00;
+      font-weight: 700;
+    }
+
+    .signal-reset {
+      color: #b71c1c;
+      font-weight: 700;
+    }
+</style>
+
+</head>
+
+<body>
+
+<input 
+  type="file"
+  id="ocr-file-input"
+  accept="image/*"
+  multiple
+  style="display:none;"
+  onchange="wczytajOCRZPlikow(event)"
+>
+
+<h1>TURBO MOBILE 5.0+ — Panel</h1>
+
+<table id="main-table">
+  <thead>
+    <tr>
+      <th>📊</th>
+      <th>Ticker</th>
+      <th>Cena</th>
+      <th>Entry</th>
+      <th>Sygnał</th>
+      <th>Widełki</th>
+      <th>TP1</th>
+      <th>TP2</th>
+      <th>TP3</th>
+      <th>🎤</th>
+      <th>📎</th>
+      <th>Akcje</th>
+    </tr>
+  </thead>
+
+  <tbody>
+    <tr>
+      <td>📊</td>
+      <td>—</td>
+      <td><input class="price-input" oninput="aktualizujSygnał(this.closest('tr'))"></td>
+      <td><input class="entry-input" oninput="sortujPoSygnale()"></td>
+      <td class="signal-czekaj">CZEKAJ</td>
+      <td>—</td>
+      <td>—</td>
+      <td>—</td>
+      <td>—</td>
+
+      <td><button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button></td>
+      <td><button onclick="document.getElementById('ocr-file-input').click()">📎</button></td>
+      <td><button onclick="usunWiersz(this)">🗑 Usuń</button></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- POPUPY -->
+<div id="popup-analiza-pro" class="popup">
+  <h2>Analiza PRO 4.5</h2>
+  <div id="analiza-pro-content"></div>
+  <button onclick="zamknijPopupAnalizaPRO()">OK</button>
+</div>
+
+<div id="popup-ustawienia" class="popup">
+  <h2>Ustawienia</h2>
+  <button onclick="zamknijPopupUstawienia()">OK</button>
+</div>
+
+<div id="popup-reset" class="popup">
+  <h2>Reset</h2>
+  <button onclick="resetSygnałów()">Reset sygnałów</button>
+  <button onclick="wyczyscTabele()">Wyczyść tabelę</button>
+  <button onclick="zamknijPopupReset()">Anuluj</button>
+</div>
+
+<script>
+/* ============================================================
+   1. OCR — wczytywanie screenów
+   ============================================================ */
+
+async function wczytajOCRZPlikow(event) {
+  const pliki = event.target.files;
+  if (!pliki || pliki.length === 0) return;
+
+  for (const plik of pliki) {
+    const reader = new FileReader();
+
+    reader.onload = async function(e) {
+      const wynik = await Tesseract.recognize(e.target.result, 'eng');
+      przetworzTekstOCR(wynik.data.text);
+    };
+
+    reader.readAsDataURL(plik);
+  }
+
+  event.target.value = "";
+}
+
+/* ============================================================
+   2. PARSER OCR
+   ============================================================ */
+
+function normalizujLiczbe(x) {
+  if (!x) return null;
+  return parseFloat(x.replace(",", ".").replace(" ", "."));
+}
+
+function przetworzTekstOCR(t) {
+  t = t.replace(/\n/g, " ");
+
+  const ticker = (t.match(/([A-Z]{3,10})\s*·/) || [null, "UNKNOWN"])[1];
+  const O = normalizujLiczbe((t.match(/O\s*([0-9 .,-]+)/i) || [null,null])[1]);
+  const H = normalizujLiczbe((t.match(/H\s*([0-9 .,-]+)/i) || [null,null])[1]);
+  const L = normalizujLiczbe((t.match(/L\s*([0-9 .,-]+)/i) || [null,null])[1]);
+  const C = normalizujLiczbe((t.match(/C\s*([0-9 .,-]+)/i) || [null,null])[1]);
+
+  // tu ewentualnie możesz dodać MA20 / DEMA9 / VOL / RVOL z backendu
+  dodajLubAktualizujWiersz({ ticker, O, H, L, C });
+}
+
+/* ============================================================
+   3. TWORZENIE / AKTUALIZACJA WIERSZA
+   ============================================================ */
+
+function dodajLubAktualizujWiersz(d) {
+  const tabela = document.getElementById("main-table");
+  let w = null;
+
+  // szukamy istniejącego wiersza po tickerze
+  for (let i = 1; i < tabela.rows.length; i++) {
+    if (tabela.rows[i].cells[1].innerText === d.ticker) {
+      w = tabela.rows[i];
+      break;
+    }
+  }
+
+  // jeśli nie ma — tworzymy nowy
+  if (!w) {
+    w = tabela.insertRow(-1);
+
+    w.insertCell(0).innerText = "📊";
+    w.insertCell(1).innerText = d.ticker;
+
+    w.insertCell(2).innerHTML = `<input class="price-input" oninput="aktualizujSygnał(this.closest('tr'))">`;
+    w.insertCell(3).innerHTML = `<input class="entry-input" oninput="sortujPoSygnale()">`;
+
+    w.insertCell(4).innerText = "CZEKAJ";
+    w.insertCell(5).innerText = "—";
+    w.insertCell(6).innerText = "—";
+    w.insertCell(7).innerText = "—";
+    w.insertCell(8).innerText = "—";
+
+    w.insertCell(9).innerHTML  = `<button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button>`;
+    w.insertCell(10).innerHTML = `<button onclick="document.getElementById('ocr-file-input').click()">📎</button>`;
+    w.insertCell(11).innerHTML = `<button onclick="usunWiersz(this)">🗑 Usuń</button>`;
+  }
+
+  // cena z C
+  if (d.C) w.cells[2].querySelector("input").value = d.C.toFixed(3);
+
+  // widełki z H/L
+  if (d.H && d.L) {
+    const dol = d.L + (d.H - d.L) * 0.20;
+    const gor = d.L + (d.H - d.L) * 0.35;
+    w.cells[5].innerText = dol.toFixed(3) + "–" + gor.toFixed(3);
+  }
+
+  // zapisujemy dane świecy / średnich / wolumenu w dataset
+  if (d.O)     w.dataset.O     = d.O;
+  if (d.H)     w.dataset.H     = d.H;
+  if (d.L)     w.dataset.L     = d.L;
+  if (d.C)     w.dataset.C     = d.C;
+  if (d.MA20)  w.dataset.MA20  = d.MA20;
+  if (d.DEMA9) w.dataset.DEMA9 = d.DEMA9;
+  if (d.VOL)   w.dataset.VOL   = d.VOL;
+  if (d.RVOL)  w.dataset.RVOL  = d.RVOL;
+
+  aktualizujSygnał(w);
+  sortujPoSygnale();
+  generujAnalizePRO(w);
+}
+
+/* ============================================================
+   4. SYGNAŁ
+   ============================================================ */
+
+function aktualizujSygnał(w) {
+  const cena = parseFloat(w.cells[2].querySelector("input").value);
+  const cell = w.cells[4];
+
+  if (!w.cells[5].innerText.includes("–") || isNaN(cena)) return;
+
+  const [dol, gor] = w.cells[5].innerText.split("–").map(parseFloat);
+
+  const O = parseFloat(w.dataset.O || 0);
+  const H = parseFloat(w.dataset.H || 0);
+  const L = parseFloat(w.dataset.L || 0);
+  const C = parseFloat(w.dataset.C || 0);
+  const MA20 = parseFloat(w.dataset.MA20 || 0);
+  const DEMA9 = parseFloat(w.dataset.DEMA9 || 0);
+
+  const momentum = (DEMA9 && cena > DEMA9) ? "MOCNE" : "SŁABE";
+  const bias = (MA20 && cena > MA20) ? "UP" : "DOWN";
+
+  let s = "CZEKAJ";
+
+  // 1. CZEKAJ DO
+  if (cena < dol) s = "CZEKAJ DO";
+
+  // 2. PRAWIE BUY
+  if (cena >= dol && cena <= gor && momentum === "SŁABE")
+      s = "PRAWIE BUY";
+
+  // 3. BUY
+  if (cena >= dol && cena <= gor && momentum === "MOCNE" && bias === "UP")
+      s = "BUY";
+
+  // 4. CZEKAJ (po wybiciu widełek)
+  if (cena > gor) s = "CZEKAJ";
+
+  // 5. UWAGA RESET
+  if (cena < dol * 0.995 && momentum === "SŁABE")
+      s = "UWAGA RESET";
+
+  // 6. RESET
+  if (cena < L && momentum === "SŁABE")
+      s = "RESET";
+
+  cell.innerText = s;
+kolorujSygnal(w, s);
+
+  generujAnalizePRO(w);
+}
+function kolorujSygnal(w, s) {
+  const cell = w.cells[4];
+
+  cell.classList.remove(
+    "signal-buy",
+    "signal-prawiebuy",
+    "signal-czekaj",
+    "signal-czekajdo",
+    "signal-uwagarese",
+    "signal-reset"
+  );
+
+  if (s === "BUY") cell.classList.add("signal-buy");
+  if (s === "PRAWIE BUY") cell.classList.add("signal-prawiebuy");
+  if (s === "CZEKAJ") cell.classList.add("signal-czekaj");
+  if (s === "CZEKAJ DO") cell.classList.add("signal-czekajdo");
+  if (s === "UWAGA RESET") cell.classList.add("signal-uwagarese");
+  if (s === "RESET") cell.classList.add("signal-reset");
+}
+
+/* ============================================================
+   4.5 — KOMENTARZ / ANALIZA PRO 4.5
+   ============================================================ */
+
+function generujAnalizePRO(w) {
+  const komentarz = generujKomentarz45(w);
+  const el = document.getElementById("analiza-pro-content");
+  if (el) el.innerHTML = komentarz;
+}
+
+function generujKomentarz45(w) {
+  const O     = parseFloat(w.dataset.O     || 0);
+  const H     = parseFloat(w.dataset.H     || 0);
+  const L     = parseFloat(w.dataset.L     || 0);
+  const C     = parseFloat(w.dataset.C     || 0);
+  const MA20  = parseFloat(w.dataset.MA20  || 0);
+  const DEMA9 = parseFloat(w.dataset.DEMA9 || 0);
+  const VOL   = parseFloat(w.dataset.VOL   || 0);
+  const RVOL  = parseFloat(w.dataset.RVOL  || 0);
+
+  const cena   = parseFloat(w.cells[2].querySelector("input").value || 0);
+  const sygnal = w.cells[4].innerText;
+  const widelki = w.cells[5].innerText;
+
+  // 1. STRUKTURA
+  let struktura = "...";
+  if (C > O && H > C)       struktura = "IMPULS WZROSTOWY";
+  else if (C < O && L < C)  struktura = "IMPULS SPADKOWY";
+  else if (C > O)           struktura = "KOREKTA WZROSTOWA";
+  else if (C < O)           struktura = "KOREKTA SPADKOWA";
+
+  // 2. MOMENTUM
+  let momentum = "...";
+  if (DEMA9) momentum = cena > DEMA9 ? "MOCNE" : "SŁABE";
+
+  // 3. ŚREDNIE
+  let srednie = "...";
+  if (MA20 && DEMA9) {
+    if (cena > MA20 && cena > DEMA9)      srednie = "WSKAZUJĄ UP";
+    else if (cena < MA20 && cena < DEMA9) srednie = "WSKAZUJĄ DOWN";
+    else                                  srednie = "NEUTRALNE";
+  }
+
+  // 4. WOLUMEN
+  let wol = "...";
+  if (RVOL >= 1.5)      wol = "MOCNY";
+  else if (RVOL >= 1.0) wol = "ŚREDNI";
+  else                  wol = "SŁABY";
+
+  // 5. SYGNAŁ 4.5 — UZASADNIENIE
+  const uzasadnienie = interpretacjaPRO(sygnal, struktura, srednie, wol, momentum, C > O ? "zielona" : "czerwona");
+
+  // 6. BIAS
+  let bias = "...";
+  if (srednie.includes("UP") && momentum === "MOCNE")        bias = "UP";
+  else if (srednie.includes("DOWN") && momentum === "SŁABE") bias = "DOWN";
+  else                                                       bias = "NEUTRAL";
+
+  // 7. POZIOMY AKTYWACJI — tu możesz podpiąć swoje poziomy
+  const buy   = "...";
+  const reset = "...";
+
+  return `
+1. STRUKTURA<br>
+- świeca: O=${O}, H=${H}, L=${L}, C=${C}<br>
+- kierunek: ${C > O ? "zielona" : "czerwona"}<br>
+➡️ STRUKTURA = ${struktura}<br><br>
+
+2. MOMENTUM<br>
+- DEMA9: ${DEMA9 || "brak"}<br>
+- siła: ${momentum}<br>
+➡️ MOMENTUM = ${momentum}<br><br>
+
+3. ŚREDNIE<br>
+- MA20: ${MA20 || "brak"}<br>
+- cena vs średnie: ${srednie}<br>
+➡️ ŚREDNIE = ${srednie}<br><br>
+
+4. WOLUMEN<br>
+- wolumen: ${VOL || "brak"}<br>
+- RVOL: ${RVOL || "brak"}<br>
+➡️ WOLUMEN = ${wol}<br><br>
+
+5. SYGNAŁ SYSTEMU 4.5<br>
+- struktura → ${struktura}<br>
+- momentum → ${momentum}<br>
+- średnie → ${srednie}<br>
+- wolumen → ${wol}<br>
+- świeca → ${C > O ? "zielona" : "czerwona"}<br>
+➡️ 4.5: SYGNAŁ = ${sygnal}<br>
+➡️ 4.5: UZASADNIENIE = ${uzasadnienie}<br><br>
+
+6. KIERUNEK / BIAS<br>
+- ${bias}<br><br>
+
+7. POZIOM AKTYWACJI<br>
+- BUY: ${buy}<br>
+- RESET: ${reset}<br>
+- WIDEŁKI BUY: ${widelki}<br>
+`;
+}
+
+function interpretacjaPRO(sygnal, struktura, srednie, wol, momentum, swieca) {
+  if (sygnal === "KUP") {
+    return "Cena w widełkach, struktura i momentum sprzyjają wejściu. Jeśli średnie i wolumen nie są przeciwne — setup A/B.";
+  }
+  if (sygnal === "CZEKAJ DO") {
+    return "Cena poniżej strefy — czekaj na wejście w widełki. Struktura i momentum tylko w tle, bez aktywacji.";
+  }
+  if (sygnal === "RESET") {
+    return "Cena zbyt nisko / po wybiciu — ryzyko fałszywego ruchu. Lepiej poczekać na nową świecę i reset układu.";
+  }
+  return "Brak wyraźnej przewagi — obserwuj świecę, momentum i wolumen, bez agresywnego wejścia.";
+}
+
+/* ============================================================
+   5. SORTOWANIE
+   ============================================================ */
+
+function sortujPoSygnale() {
+  const tabela = document.getElementById("main-table");
+  const rows = Array.from(tabela.rows).slice(1);
+
+  const priorytet = { "KUP":1, "CZEKAJ DO":2, "CZEKAJ":3, "RESET":4 };
+
+  rows.sort((a,b) =>
+    (priorytet[a.cells[4].innerText]||99) -
+    (priorytet[b.cells[4].innerText]||99)
+  );
+
+  rows.forEach(r => tabela.appendChild(r));
+}
+
+/* ============================================================
+   6. MIKROFON 4.5 — Web Speech API (dla konkretnego wiersza)
+   ============================================================ */
+
+let recognition = null;
+let aktywnyWiersz = null;
+
+function uruchomMikrofon(wiersz) {
+  aktywnyWiersz = wiersz;
+
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    alert("Twoja przeglądarka nie obsługuje mikrofonu.");
+    return;
+  }
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+
+  recognition.lang = "pl-PL";
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  recognition.start();
+
+  recognition.onresult = function(event) {
+    const tekst = event.results[0][0].transcript;
+    const liczba = tekst.replace(",", ".").match(/[0-9.]+/);
+
+    if (!liczba) {
+      alert("Nie rozpoznano liczby.");
+      return;
+    }
+
+    const cena = parseFloat(liczba[0]);
+    if (isNaN(cena)) {
+      alert("Nie rozpoznano poprawnej liczby.");
+      return;
+    }
+
+    aktywnyWiersz.cells[2].querySelector("input").value = cena.toFixed(3);
+
+    aktualizujSygnał(aktywnyWiersz);
+    sortujPoSygnale();
+  };
+
+  recognition.onerror = function() {
+    alert("Błąd mikrofonu.");
+  };
+}
+
+/* ============================================================
+   7. RESET / USUWANIE / POPUPY
+   ============================================================ */
+
+function resetSygnałów() {
+  const tabela = document.getElementById("main-table");
+  for (let i = 1; i < tabela.rows.length; i++) {
+    tabela.rows[i].cells[4].innerText = "CZEKAJ";
+  }
+}
+
+function wyczyscTabele() {
+  const tabela = document.getElementById("main-table");
+  while (tabela.rows.length > 1) tabela.deleteRow(1);
+}
+
+function usunWiersz(btn) {
+  const tr = btn.closest("tr");
+  if (!tr) return;
+  tr.parentNode.removeChild(tr);
+}
+
+function zamknijPopupAnalizaPRO(){ 
+  const el = document.getElementById("popup-analiza-pro");
+  if (el) el.style.display="none"; 
+}
+
+function pokazPopupUstawienia(){ 
+  const el = document.getElementById("popup-ustawienia");
+  if (el) el.style.display="block"; 
+}
+
+function zamknijPopupUstawienia(){ 
+  const el = document.getElementById("popup-ustawienia");
+  if (el) el.style.display="none"; 
+}
+
+function pokazPopupReset(){ 
+  const el = document.getElementById("popup-reset");
+  if (el) el.style.display="block"; 
+}
+
+function zamknijPopupReset(){ 
+  const el = document.getElementById("popup-reset");
+  if (el) el.style.display="none"; 
+}
+</script>
+
+</body>
+</html>
