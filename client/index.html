@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TURBO OCR 2.0 REAL — XTB Edition</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+
+  <style>
+    body { font-family: Arial; background:#f6f7fb; margin:20px; }
+    table { width:100%; border-collapse:collapse; background:white; }
+    th, td { padding:8px 10px; border-bottom:1px solid #eee; font-size:13px; }
+    th { background:#fafafa; font-weight:600; }
+    button { padding:6px 8px; cursor:pointer; border-radius:4px; }
+
+    .popup {
+      display:none; position:fixed; z-index:9999;
+      left:50%; top:50%; transform:translate(-50%,-50%);
+      background:white; border:2px solid #222;
+      padding:16px; width:360px; max-height:80vh; overflow:auto;
+    }
+
+    .signal-buy       { color:#0a7a3a; font-weight:700; }
+    .signal-prawiebuy { color:#7ac70c; font-weight:700; }
+    .signal-czekaj    { color:#555;   font-weight:700; }
+    .signal-czekajdo  { color:#d4a000;font-weight:700; }
+    .signal-uwagarese { color:#ff7f00;font-weight:700; }
+    .signal-reset     { color:#b71c1c;font-weight:700; }
+  </style>
+</head>
+
+<body>
+
+<input 
+  type="file"
+  id="ocr-file-input"
+  accept="image/*"
+  multiple
+  style="display:none;"
+  onchange="wczytajOCRZPlikow(event)"
+>
+
+<h1>TURBO OCR 2.0 REAL — XTB Edition</h1>
+
+<table id="main-table">
+  <thead>
+    <tr>
+      <th>📊</th>
+      <th>Ticker</th>
+      <th>Cena</th>
+      <th>Entry</th>
+      <th>Sygnał</th>
+      <th>Widełki</th>
+      <th>TP1</th>
+      <th>TP2</th>
+      <th>TP3</th>
+      <th>🎤</th>
+      <th>📎</th>
+      <th>Akcje</th>
+    </tr>
+  </thead>
+
+  <tbody>
+    <tr>
+      <td>📊</td>
+      <td>—</td>
+      <td><input class="price-input" oninput="aktualizujSygnał(this.closest('tr'))"></td>
+      <td><input class="entry-input" oninput="sortujPoSygnale()"></td>
+      <td class="signal-czekaj">CZEKAJ</td>
+      <td>—</td>
+      <td>—</td>
+      <td>—</td>
+      <td>—</td>
+      <td><button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button></td>
+      <td><button onclick="document.getElementById('ocr-file-input').click()">📎</button></td>
+      <td><button onclick="usunWiersz(this)">🗑 Usuń</button></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- POPUP OCR -->
+<div id="popup-ocr" class="popup">
+  <h2>OCR — podgląd</h2>
+  <pre id="popup-ocr-raw" style="white-space:pre-wrap;font-size:11px;"></pre>
+  <button onclick="zatwierdzOCR()">Użyj danych</button>
+  <button onclick="zamknijPopupOCR()">Anuluj</button>
+</div>
+
+<script>
+/* ============================================================
+   PREPROCESSING OBRAZU (REAL)
+   ============================================================ */
+
+async function preprocessImage(dataUrl) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+
+      canvas.width = img.width;
+      canvas.height = img.height;
+
+      ctx.drawImage(img, 0, 0);
+
+      let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let data = imageData.data;
+
+      // grayscale
+      for (let i = 0; i < data.length; i += 4) {
+        const avg = (data[i] + data[i+1] + data[i+2]) / 3;
+        data[i] = data[i+1] = data[i+2] = avg;
+      }
+
+      // threshold (binaryzacja)
+      for (let i = 0; i < data.length; i += 4) {
+        const v = data[i] > 140 ? 255 : 0;
+        data[i] = data[i+1] = data[i+2] = v;
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+
+      resolve(canvas.toDataURL());
+    };
+    img.src = dataUrl;
+  });
+}
+
+/* ============================================================
+   OCR — wczytywanie
+   ============================================================ */
+
+let ostatniTekstOCR = "";
+
+async function wczytajOCRZPlikow(event) {
+  const pliki = event.target.files;
+  if (!pliki || pliki.length === 0) return;
+
+  for (const plik of pliki) {
+    const reader = new FileReader();
+    reader.onload = e => startOCR(e.target.result);
+    reader.readAsDataURL(plik);
+  }
+
+  event.target.value = "";
+}
+async function startOCR(dataUrl) {
+  const blob = await (await fetch(dataUrl)).blob();
+  const form = new FormData();
+  form.append("file", blob, "screen.png");
+
+  const res = await fetch("https://turbo-mobile-5-ocr.onrender.com/ocr", {
+    method: "POST",
+    body: form
+  });
+
+  const data = await res.json();
+  dodajLubAktualizujWiersz(data);
+}
+
+
+
+function zatwierdzOCR() {
+  if (ostatniTekstOCR) przetworzTekstOCR(ostatniTekstOCR);
+  zamknijPopupOCR();
+}
+
+function zamknijPopupOCR() {
+  document.getElementById("popup-ocr").style.display = "none";
+}
+
+/* ============================================================
+   NORMALIZACJA LICZB (XTB)
+   ============================================================ */
+
+function normalizujLiczbe(x) {
+  if (!x) return null;
+
+  x = x.replace(/[^\d,.\s]/g, "").replace(/\s+/g, "");
+
+  if (!x.includes(",") && !x.includes(".") && x.length > 3) {
+    x = x.slice(0, -2) + "," + x.slice(-2);
+  }
+
+  return parseFloat(x.replace(",", "."));
+}
+
+/* ============================================================
+   FUZZY NAZWY SPÓŁEK (XTB)
+   ============================================================ */
+
+function generujTickerZNazwy(text) {
+  const upper = text.toUpperCase();
+
+  const mapowania = [
+    { nazwy: ["GRUPA KETY", "GRUPA KĘTY", "KETY", "KĘTY"], ticker: "KTY" },
+    { nazwy: ["CD PROJEKT", "CDPROJEKT"], ticker: "CDR" },
+    { nazwy: ["ALLEGRO"], ticker: "ALE" },
+    { nazwy: ["ORLEN", "PKN ORLEN"], ticker: "PKN" },
+    { nazwy: ["ASBIS"], ticker: "ASB" },
+    { nazwy: ["XTB"], ticker: "XTB" },
+    { nazwy: ["JSW"], ticker: "JSW" },
+    { nazwy: ["MBANK"], ticker: "MBK" }
+  ];
+
+  for (const m of mapowania) {
+    for (const n of m.nazwy) {
+      if (upper.includes(n)) return m.ticker;
+    }
+  }
+
+  return null;
+}
+
+/* ============================================================
+   FALLBACK — skróty
+   ============================================================ */
+
+function wykryjTickerZeSkrotow(text) {
+  const upper = text.toUpperCase();
+  const matches = upper.match(/\b[A-Z]{2,5}\b/g) || [];
+
+  const blacklist = new Set([
+    "GPW","W","MA","RSI","VOL","WOL","EXP","EMA","OPEN","HIGH","LOW","CLOSE",
+    "O","H","L","C","MIN","MAX","BUY","SELL","LONG","SHORT","STOP","LOSS",
+    "TF","UTC","LOG","PT","ST","ND","RD","TH","AUTO"
+  ]);
+
+  for (const m of matches) {
+    if (!blacklist.has(m)) return m;
+  }
+
+  return null;
+}
+
+/* ============================================================
+   GŁÓWNE WYKRYWANIE TICKERA
+   ============================================================ */
+
+function wykryjTicker(text) {
+  const zNazwy = generujTickerZNazwy(text);
+  if (zNazwy) return zNazwy;
+
+  const zeSkrotu = wykryjTickerZeSkrotow(text);
+  if (zeSkrotu) return zeSkrotu;
+
+  return "UNKNOWN";
+}
+
+/* ============================================================
+   PARSER XTB — TURBO OCR 2.0 REAL
+   ============================================================ */
+
+function przetworzTekstOCR(t) {
+  t = t.replace(/\n/g, " ");
+
+  const ticker = wykryjTicker(t);
+
+  const O = normalizujLiczbe((t.match(/O\s*([0-9\s.,]+)/i) || [null,null])[1]);
+  const H = normalizujLiczbe((t.match(/H\s*([0-9\s.,]+)/i) || [null,null])[1]);
+  const L = normalizujLiczbe((t.match(/L\s*([0-9\s.,]+)/i) || [null,null])[1]);
+  const C = normalizujLiczbe((t.match(/C\s*([0-9\s.,]+)/i) || [null,null])[1]);
+
+  const MA20 = normalizujLiczbe((t.match(/MA\s*20[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
+
+  let DEMA9 = null;
+  const demaBlock = t.match(/PODWÓJNA\s+ŚREDNIA[^0-9]*([0-9\s.,]+)\s+([0-9\s.,]+)/i);
+  if (demaBlock) DEMA9 = normalizujLiczbe(demaBlock[1]);
+
+  const RSI = normalizujLiczbe((t.match(/RSI[-\s]*14[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
+
+  const VOL = normalizujLiczbe((t.match(/WOLUMEN[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
+
+  dodajLubAktualizujWiersz({ ticker, O, H, L, C, MA20, DEMA9, VOL, RVOL:null });
+}
+
+/* ============================================================
+   TWORZENIE / AKTUALIZACJA WIERSZA
+   ============================================================ */
+
+function dodajLubAktualizujWiersz(d) {
+  const tabela = document.getElementById("main-table");
+  let w = null;
+
+  for (let i = 1; i < tabela.rows.length; i++) {
+    if (tabela.rows[i].cells[1].innerText === d.ticker) {
+      w = tabela.rows[i];
+      break;
+    }
+  }
+
+  if (!w) {
+    w = tabela.insertRow(-1);
+
+    w.insertCell(0).innerText = "📊";
+    w.insertCell(1).innerText = d.ticker;
+
+    w.insertCell(2).innerHTML = `<input class="price-input" oninput="aktualizujSygnał(this.closest('tr'))">`;
+    w.insertCell(3).innerHTML = `<input class="entry-input" oninput="sortujPoSygnale()">`;
+
+    w.insertCell(4).innerText = "CZEKAJ";
+    w.insertCell(5).innerText = "—";
+    w.insertCell(6).innerText = "—";
+    w.insertCell(7).innerText = "—";
+    w.insertCell(8).innerText = "—";
+
+    w.insertCell(9).innerHTML  = `<button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button>`;
+    w.insertCell(10).innerHTML = `<button onclick="document.getElementById('ocr-file-input').click()">📎</button>`;
+    w.insertCell(11).innerHTML = `<button onclick="usunWiersz(this)">🗑 Usuń</button>`;
+  }
+
+  if (d.C) w.cells[2].querySelector("input").value = d.C.toFixed(3);
+
+  if (d.H && d.L) {
+    const dol = d.L + (d.H - d.L) * 0.20;
+    const gor = d.L + (d.H - d.L) * 0.35;
+    w.cells[5].innerText = dol.toFixed(3) + "–" + gor.toFixed(3);
+  }
+
+  if (d.O)     w.dataset.O     = d.O;
+  if (d.H)     w.dataset.H     = d.H;
+  if (d.L)     w.dataset.L     = d.L;
+  if (d.C)     w.dataset.C     = d.C;
+  if (d.MA20)  w.dataset.MA20  = d.MA20;
+  if (d.DEMA9) w.dataset.DEMA9 = d.DEMA9;
+  if (d.VOL)   w.dataset.VOL   = d.VOL;
+
+  aktualizujSygnał(w);
+  sortujPoSygnale();
+}
+
+/* ============================================================
+   SYGNAŁ 4.5
+   ============================================================ */
+
+function aktualizujSygnał(w) {
+  const cena = parseFloat(w.cells[2].querySelector("input").value);
+  const cell = w.cells[4];
+
+  if (!w.cells[5].innerText.includes("–") || isNaN(cena)) return;
+
+  const [dol, gor] = w.cells[5].innerText.split("–").map(parseFloat);
+
+  const L = parseFloat(w.dataset.L || 0);
+  const MA20 = parseFloat(w.dataset.MA20 || 0);
+  const DEMA9 = parseFloat(w.dataset.DEMA9 || 0);
+
+  const momentum = (DEMA9 && cena > DEMA9) ? "MOCNE" : "SŁABE";
+  const bias = (MA20 && cena > MA20) ? "UP" : "DOWN";
+
+  let s = "CZEKAJ";
+
+  if (cena < dol) s = "CZEKAJ DO";
+
+  if (cena >= dol && cena <= gor && momentum === "SŁABE")
+      s = "PRAWIE BUY";
+
+  if (cena >= dol && cena <= gor && momentum === "MOCNE" && bias === "UP")
+      s = "BUY";
+
+  if (cena > gor) s = "CZEKAJ";
+
+  if (cena < dol * 0.995 && momentum === "SŁABE")
+      s = "UWAGA RESET";
+
+  if (cena < L && momentum === "SŁABE")
+      s = "RESET";
+
+  cell.innerText = s;
+  kolorujSygnal(w, s);
+}
+
+/* ============================================================
+   KOLORY SYGNAŁÓW
+   ============================================================ */
+
+function kolorujSygnal(w, s) {
+  const cell = w.cells[4];
+
+  cell.classList.remove(
+    "signal-buy",
+    "signal-prawiebuy",
+    "signal-czekaj",
+    "signal-czekajdo",
+    "signal-uwagarese",
+    "signal-reset"
+  );
+
+  if (s === "BUY")          cell.classList.add("signal-buy");
+  if (s === "PRAWIE BUY")   cell.classList.add("signal-prawiebuy");
+  if (s === "CZEKAJ")       cell.classList.add("signal-czekaj");
+  if (s === "CZEKAJ DO")    cell.classList.add("signal-czekajdo");
+  if (s === "UWAGA RESET")  cell.classList.add("signal-uwagarese");
+  if (s === "RESET")        cell.classList.add("signal-reset");
+}
+
+/* ============================================================
+   SORTOWANIE WG SYGNAŁU
+   ============================================================ */
+
+function sortujPoSygnale() {
+  const tabela = document.getElementById("main-table");
+  const rows = Array.from(tabela.rows).slice(1);
+
+  const priorytet = { 
+    "BUY":1, 
+    "PRAWIE BUY":2, 
+    "CZEKAJ DO":3, 
+    "CZEKAJ":4, 
+    "UWAGA RESET":5,
+    "RESET":6 
+  };
+
+  rows.sort((a,b) =>
+    (priorytet[a.cells[4].innerText]||99) -
+    (priorytet[b.cells[4].innerText]||99)
+  );
+
+  rows.forEach(r => tabela.appendChild(r));
+}
+
+/* ============================================================
+   MIKROFON
+   ============================================================ */
+
+let recognition = null;
+let aktywnyWiersz = null;
+
+function uruchomMikrofon(wiersz) {
+  aktywnyWiersz = wiersz;
+
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    alert("Twoja przeglądarka nie obsługuje mikrofonu.");
+    return;
+  }
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+
+  recognition.lang = "pl-PL";
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  recognition.start();
+
+  recognition.onresult = function(event) {
+    const tekst = event.results[0][0].transcript;
+    const liczba = tekst.replace(",", ".").match(/[0-9.]+/);
+
+    if (!liczba) return alert("Nie rozpoznano liczby.");
+
+    const cena = parseFloat(liczba[0]);
+    if (isNaN(cena)) return alert("Niepoprawna liczba.");
+
+    aktywnyWiersz.cells[2].querySelector("input").value = cena.toFixed(3);
+
+    aktualizujSygnał(aktywnyWiersz);
+    sortujPoSygnale();
+  };
+
+  recognition.onerror = function() {
+    alert("Błąd mikrofonu.");
+  };
+}
+
+/* ============================================================
+   USUWANIE WIERSZA
+   ============================================================ */
+
+function usunWiersz(btn) {
+  const tr = btn.closest("tr");
+  if (tr) tr.remove();
+}
+</script>
+
+</body>
+</html>
