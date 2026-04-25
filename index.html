@@ -3,9 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>TURBO MOBILE 5.0+ OCR</title>
+  <title>TURBO OCR 2.0 LITE — XTB Edition</title>
 
-  <!-- Tesseract.js -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 
   <style>
@@ -42,7 +41,7 @@
   onchange="wczytajOCRZPlikow(event)"
 >
 
-<h1>TURBO MOBILE 5.0+ — Panel</h1>
+<h1>TURBO OCR 2.0 LITE — XTB Edition</h1>
 
 <table id="main-table">
   <thead>
@@ -80,25 +79,6 @@
   </tbody>
 </table>
 
-<!-- POPUPY -->
-<div id="popup-analiza-pro" class="popup">
-  <h2>Analiza PRO 4.5</h2>
-  <div id="analiza-pro-content"></div>
-  <button onclick="zamknijPopupAnalizaPRO()">OK</button>
-</div>
-
-<div id="popup-ustawienia" class="popup">
-  <h2>Ustawienia</h2>
-  <button onclick="zamknijPopupUstawienia()">OK</button>
-</div>
-
-<div id="popup-reset" class="popup">
-  <h2>Reset</h2>
-  <button onclick="resetSygnałów()">Reset sygnałów</button>
-  <button onclick="wyczyscTabele()">Wyczyść tabelę</button>
-  <button onclick="zamknijPopupReset()">Anuluj</button>
-</div>
-
 <!-- POPUP OCR -->
 <div id="popup-ocr" class="popup">
   <h2>OCR — podgląd</h2>
@@ -108,7 +88,7 @@
 </div>
 <script>
 /* ============================================================
-   1. OCR — wczytywanie screenów + popup
+   OCR — wczytywanie
    ============================================================ */
 
 let ostatniTekstOCR = "";
@@ -119,9 +99,7 @@ async function wczytajOCRZPlikow(event) {
 
   for (const plik of pliki) {
     const reader = new FileReader();
-    reader.onload = function(e) {
-      startOCR(e.target.result);
-    };
+    reader.onload = e => startOCR(e.target.result);
     reader.readAsDataURL(plik);
   }
 
@@ -134,45 +112,53 @@ async function startOCR(dataUrl) {
 
   ostatniTekstOCR = text;
 
-  const pre = document.getElementById("popup-ocr-raw");
-  if (pre) pre.textContent = text.trim() || "(brak tekstu)";
-
-  const popup = document.getElementById("popup-ocr");
-  if (popup) popup.style.display = "block";
+  document.getElementById("popup-ocr-raw").textContent = text.trim();
+  document.getElementById("popup-ocr").style.display = "block";
 }
 
 function zatwierdzOCR() {
-  if (ostatniTekstOCR) {
-    przetworzTekstOCR(ostatniTekstOCR);
-  }
+  if (ostatniTekstOCR) przetworzTekstOCR(ostatniTekstOCR);
   zamknijPopupOCR();
 }
 
 function zamknijPopupOCR() {
-  const popup = document.getElementById("popup-ocr");
-  if (popup) popup.style.display = "none";
+  document.getElementById("popup-ocr").style.display = "none";
 }
 
 /* ============================================================
-   2. AUTOMATYCZNE WYKRYWANIE NAZWY SPÓŁKI (wersja odpornościowa)
+   NORMALIZACJA LICZB (XTB)
+   ============================================================ */
+
+function normalizujLiczbe(x) {
+  if (!x) return null;
+
+  // usuń śmieci typu "O1 129,00" → "1129,00"
+  x = x.replace(/[^\d,.\s]/g, "").replace(/\s+/g, "");
+
+  // jeśli brak przecinka/kropki → wstaw przed 2 ostatnie cyfry
+  if (!x.includes(",") && !x.includes(".") && x.length > 3) {
+    x = x.slice(0, -2) + "," + x.slice(-2);
+  }
+
+  return parseFloat(x.replace(",", "."));
+}
+
+/* ============================================================
+   FUZZY NAZWY SPÓŁEK (XTB)
    ============================================================ */
 
 function generujTickerZNazwy(text) {
-  const upper = text
-    .toUpperCase()
-    .replace(/[^A-Z0-9ĄĆĘŁŃÓŚŹŻ\s]/g, " ")
-    .replace(/\s+/g, " ");
+  const upper = text.toUpperCase();
 
-  // 1) Specjalne mapowania (działają nawet przy literówkach OCR)
   const mapowania = [
     { nazwy: ["GRUPA KETY", "GRUPA KĘTY", "KETY", "KĘTY"], ticker: "KTY" },
-    { nazwy: ["ALLEGRO"], ticker: "ALE" },
-    { nazwy: ["PKN ORLEN", "ORLEN"], ticker: "PKN" },
     { nazwy: ["CD PROJEKT", "CDPROJEKT"], ticker: "CDR" },
-    { nazwy: ["MBANK"], ticker: "MBK" },
+    { nazwy: ["ALLEGRO"], ticker: "ALE" },
+    { nazwy: ["ORLEN", "PKN ORLEN"], ticker: "PKN" },
     { nazwy: ["ASBIS"], ticker: "ASB" },
     { nazwy: ["XTB"], ticker: "XTB" },
-    { nazwy: ["JSW"], ticker: "JSW" }
+    { nazwy: ["JSW"], ticker: "JSW" },
+    { nazwy: ["MBANK"], ticker: "MBK" }
   ];
 
   for (const m of mapowania) {
@@ -181,27 +167,11 @@ function generujTickerZNazwy(text) {
     }
   }
 
-  // 2) Automatyczne generowanie tickera z NAZWY (bez mapy)
-  const slowa = upper.split(" ").filter(s => s.length >= 3);
-
-  const blacklist = new Set([
-    "WARSAW","STOCK","EXCHANGE","GPW","WIG","INDEX","FUTURES",
-    "KONTRAKTY","CFD","RSI","WOLUMEN","VOLUME","MA","EMA","DEMA",
-    "OPEN","HIGH","LOW","CLOSE","AUTO","UTC"
-  ]);
-
-  for (let s of slowa) {
-    if (blacklist.has(s)) continue;
-
-    if (s.length === 3) return s;
-    if (s.length > 3) return s.slice(0,3);
-  }
-
   return null;
 }
 
 /* ============================================================
-   3. FALLBACK — skróty 2–5 liter
+   FALLBACK — skróty
    ============================================================ */
 
 function wykryjTickerZeSkrotow(text) {
@@ -222,7 +192,7 @@ function wykryjTickerZeSkrotow(text) {
 }
 
 /* ============================================================
-   4. GŁÓWNA FUNKCJA — wykrywanie tickera
+   GŁÓWNE WYKRYWANIE TICKERA
    ============================================================ */
 
 function wykryjTicker(text) {
@@ -236,38 +206,40 @@ function wykryjTicker(text) {
 }
 
 /* ============================================================
-   5. PARSER OCR (O/H/L/C, MA20, DEMA9, wolumen)
+   PARSER XTB — TURBO OCR 2.0 LITE
    ============================================================ */
-
-function normalizujLiczbe(x) {
-  if (!x) return null;
-  return parseFloat(
-    x.replace(/\s/g, "")
-     .replace(",", ".")
-  );
-}
 
 function przetworzTekstOCR(t) {
   t = t.replace(/\n/g, " ");
 
   const ticker = wykryjTicker(t);
 
-  const O = normalizujLiczbe((t.match(/O\s*([0-9.,\s]+)/i) || [null,null])[1]);
-  const H = normalizujLiczbe((t.match(/H\s*([0-9.,\s]+)/i) || [null,null])[1]);
-  const L = normalizujLiczbe((t.match(/L\s*([0-9.,\s]+)/i) || [null,null])[1]);
-  const C = normalizujLiczbe((t.match(/C\s*([0-9.,\s]+)/i) || [null,null])[1]);
+  // O/H/L/C
+  const O = normalizujLiczbe((t.match(/O\s*([0-9\s.,]+)/i) || [null,null])[1]);
+  const H = normalizujLiczbe((t.match(/H\s*([0-9\s.,]+)/i) || [null,null])[1]);
+  const L = normalizujLiczbe((t.match(/L\s*([0-9\s.,]+)/i) || [null,null])[1]);
+  const C = normalizujLiczbe((t.match(/C\s*([0-9\s.,]+)/i) || [null,null])[1]);
 
-  const MA20  = normalizujLiczbe((t.match(/MA\s*20[^0-9]*([0-9.,\s]+)/i) || [null,null])[1]);
-  const DEMA9 = normalizujLiczbe((t.match(/(DEMA|PODWÓJNA)\s*ŚREDNIA[^0-9]*([0-9.,\s]+)/i) || [null,null])[2]);
-  const VOL   = normalizujLiczbe((t.match(/WOLUMEN[^0-9]*([0-9.,\s]+)/i) || [null,null])[1]);
-  const RVOL  = normalizujLiczbe((t.match(/RVOL[^0-9]*([0-9.,\s]+)/i) || [null,null])[1]);
+  // MA20
+  const MA20 = normalizujLiczbe((t.match(/MA\s*20[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
 
-  dodajLubAktualizujWiersz({ ticker, O, H, L, C, MA20, DEMA9, VOL, RVOL });
+  // DEMA9 (Podwójna Średnia Krocząca)
+  let DEMA9 = null;
+  const demaBlock = t.match(/PODWÓJNA\s+ŚREDNIA[^0-9]*([0-9\s.,]+)\s+([0-9\s.,]+)/i);
+  if (demaBlock) DEMA9 = normalizujLiczbe(demaBlock[1]);
+
+  // RSI
+  const RSI = normalizujLiczbe((t.match(/RSI[-\s]*14[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
+
+  // Wolumen
+  const VOL = normalizujLiczbe((t.match(/WOLUMEN[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
+
+  dodajLubAktualizujWiersz({ ticker, O, H, L, C, MA20, DEMA9, VOL, RVOL:null });
 }
 </script>
 <script>
 /* ============================================================
-   6. SYGNAŁ 4.5
+   SYGNAŁ 4.5
    ============================================================ */
 
 function aktualizujSygnał(w) {
@@ -305,8 +277,11 @@ function aktualizujSygnał(w) {
 
   cell.innerText = s;
   kolorujSygnal(w, s);
-  generujAnalizePRO(w);
 }
+
+/* ============================================================
+   KOLORY SYGNAŁÓW
+   ============================================================ */
 
 function kolorujSygnal(w, s) {
   const cell = w.cells[4];
@@ -329,95 +304,7 @@ function kolorujSygnal(w, s) {
 }
 
 /* ============================================================
-   7. ANALIZA PRO 4.5
-   ============================================================ */
-
-function generujAnalizePRO(w) {
-  const komentarz = generujKomentarz45(w);
-  const el = document.getElementById("analiza-pro-content");
-  if (el) el.innerHTML = komentarz;
-}
-
-function generujKomentarz45(w) {
-  const O     = parseFloat(w.dataset.O     || 0);
-  const H     = parseFloat(w.dataset.H     || 0);
-  const L     = parseFloat(w.dataset.L     || 0);
-  const C     = parseFloat(w.dataset.C     || 0);
-  const MA20  = parseFloat(w.dataset.MA20  || 0);
-  const DEMA9 = parseFloat(w.dataset.DEMA9 || 0);
-  const VOL   = parseFloat(w.dataset.VOL   || 0);
-  const RVOL  = parseFloat(w.dataset.RVOL  || 0);
-
-  const cena   = parseFloat(w.cells[2].querySelector("input").value || 0);
-  const sygnal = w.cells[4].innerText;
-  const widelki = w.cells[5].innerText;
-
-  let struktura = "...";
-  if (C > O && H > C)       struktura = "IMPULS WZROSTOWY";
-  else if (C < O && L < C)  struktura = "IMPULS SPADKOWY";
-  else if (C > O)           struktura = "KOREKTA WZROSTOWA";
-  else if (C < O)           struktura = "KOREKTA SPADKOWA";
-
-  let momentum = DEMA9 ? (cena > DEMA9 ? "MOCNE" : "SŁABE") : "...";
-
-  let srednie = "...";
-  if (MA20 && DEMA9) {
-    if (cena > MA20 && cena > DEMA9)      srednie = "WSKAZUJĄ UP";
-    else if (cena < MA20 && cena < DEMA9) srednie = "WSKAZUJĄ DOWN";
-    else                                  srednie = "NEUTRALNE";
-  }
-
-  let wol = "...";
-  if (RVOL >= 1.5)      wol = "MOCNY";
-  else if (RVOL >= 1.0) wol = "ŚREDNI";
-  else                  wol = "SŁABY";
-
-  const uzasadnienie = interpretacjaPRO(
-    sygnal, struktura, srednie, wol, momentum, C > O ? "zielona" : "czerwona"
-  );
-
-  let bias = "...";
-  if (srednie.includes("UP") && momentum === "MOCNE")        bias = "UP";
-  else if (srednie.includes("DOWN") && momentum === "SŁABE") bias = "DOWN";
-  else                                                       bias = "NEUTRAL";
-
-  return `
-1. STRUKTURA<br>
-- świeca: O=${O}, H=${H}, L=${L}, C=${C}<br>
-➡️ ${struktura}<br><br>
-
-2. MOMENTUM<br>
-➡️ ${momentum}<br><br>
-
-3. ŚREDNIE<br>
-➡️ ${srednie}<br><br>
-
-4. WOLUMEN<br>
-➡️ ${wol}<br><br>
-
-5. SYGNAŁ SYSTEMU 4.5<br>
-➡️ ${sygnal}<br>
-➡️ ${uzasadnienie}<br><br>
-
-6. BIAS<br>
-➡️ ${bias}<br><br>
-
-7. WIDEŁKI BUY<br>
-➡️ ${widelki}<br>
-`;
-}
-
-function interpretacjaPRO(sygnal, struktura, srednie, wol, momentum, swieca) {
-  if (sygnal === "BUY") return "Cena w widełkach, struktura i momentum sprzyjają wejściu.";
-  if (sygnal === "PRAWIE BUY") return "Blisko wejścia — momentum słabe, ale strefa dobra.";
-  if (sygnal === "CZEKAJ DO") return "Cena poniżej strefy — czekaj na wejście.";
-  if (sygnal === "UWAGA RESET") return "Ryzyko wybicia w dół — obserwuj świecę.";
-  if (sygnal === "RESET") return "Układ stracił przewagę — czekaj na nową świecę.";
-  return "Brak przewagi — obserwuj.";
-}
-
-/* ============================================================
-   8. SORTOWANIE
+   SORTOWANIE WG SYGNAŁU
    ============================================================ */
 
 function sortujPoSygnale() {
@@ -442,7 +329,7 @@ function sortujPoSygnale() {
 }
 
 /* ============================================================
-   9. MIKROFON
+   MIKROFON
    ============================================================ */
 
 let recognition = null;
@@ -486,46 +373,14 @@ function uruchomMikrofon(wiersz) {
 }
 
 /* ============================================================
-   10. RESET / USUWANIE / POPUPY
+   USUWANIE WIERSZA
    ============================================================ */
-
-function resetSygnałów() {
-  const tabela = document.getElementById("main-table");
-  for (let i = 1; i < tabela.rows.length; i++) {
-    tabela.rows[i].cells[4].innerText = "CZEKAJ";
-    kolorujSygnal(tabela.rows[i], "CZEKAJ");
-  }
-}
-
-function wyczyscTabele() {
-  const tabela = document.getElementById("main-table");
-  while (tabela.rows.length > 1) tabela.deleteRow(1);
-}
 
 function usunWiersz(btn) {
   const tr = btn.closest("tr");
   if (tr) tr.remove();
 }
 
-function zamknijPopupAnalizaPRO(){ 
-  document.getElementById("popup-analiza-pro").style.display="none"; 
-}
-
-function pokazPopupUstawienia(){ 
-  document.getElementById("popup-ustawienia").style.display="block"; 
-}
-
-function zamknijPopupUstawienia(){ 
-  document.getElementById("popup-ustawienia").style.display="none"; 
-}
-
-function pokazPopupReset(){ 
-  document.getElementById("popup-reset").style.display="block"; 
-}
-
-function zamknijPopupReset(){ 
-  document.getElementById("popup-reset").style.display="none"; 
-}
 </script>
 
 </body>
