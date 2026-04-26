@@ -14,13 +14,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ocr = PaddleOCR(
-    lang="en",
-    use_angle_cls=True,
-    ocr_version="PP-OCRv4"
-)
+# ============================================================
+#  LAZY LOAD OCR (Render-friendly)
+# ============================================================
 
-
+def get_ocr():
+    return PaddleOCR(
+        lang="en",
+        use_angle_cls=True,
+        ocr_version="PP-OCRv4"
+    )
 
 
 # ============================================================
@@ -61,6 +64,7 @@ def preprocess(img: np.ndarray) -> np.ndarray:
 # ============================================================
 
 def extract_text(img: np.ndarray) -> str:
+    ocr = get_ocr()  # LAZY LOAD
     result = ocr.ocr(img, cls=True)
     if not result or not result[0]:
         return ""
@@ -210,17 +214,14 @@ def multi_find(text: str, labels):
 
 
 # ============================================================
-#  GŁÓWNY ENDPOINT OCR — POPRAWIONY
+#  GŁÓWNY ENDPOINT OCR
 # ============================================================
 
 @app.post("/ocr")
 async def ocr_endpoint(file: UploadFile = File(...)):
     content = await file.read()
-    print("FILE SIZE:", len(content))
-
     img_array = np.frombuffer(content, np.uint8)
     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-    print("IMG:", img is not None)
 
     if img is None:
         return {"error": "IMAGE_DECODE_FAILED"}
