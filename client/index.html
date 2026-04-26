@@ -113,9 +113,10 @@ async function startOCR(dataUrl) {
   });
 
   const d = await res.json();
-  console.log("OCR RESPONSE:", d);
-  dodajLubAktualizujWiersz(d);
-  zapiszTabele();
+console.log("OCR RESPONSE:", d);
+dodajLubAktualizujWiersz(d);
+zapiszTabele();
+
 }
 
 /* ============================================================
