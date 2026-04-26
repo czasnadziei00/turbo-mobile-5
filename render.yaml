@@ -1,7 +1,9 @@
 services:
   - type: web
-    name: turbo-mobile-5-ocr
+    name: turbo-mobile-5-backend
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    plan: starter
+    region: frankfurt
+    plan: free
+    rootDir: server
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port 10000"
