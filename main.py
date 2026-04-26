@@ -22,7 +22,17 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"status": "OK", "engine": "tesseract-pro", "version": "1.1-ai-ticker"}
+    return {
+        "status": "OK",
+        "engine": "tesseract-ultra-pro",
+        "version": "2.0",
+        "features": [
+            "AI Ticker Correct",
+            "AI Number Correct",
+            "AI Interval Correct",
+            "Market Detection"
+        ]
+    }
 
 
 # ============================================================
@@ -30,21 +40,9 @@ def health():
 # ============================================================
 
 def ocr_text(img: np.ndarray) -> str:
-    """
-    PRO OCR:
-    - odszumianie
-    - adaptacyjny threshold
-    - fallback OCR
-    - czyszczenie artefaktów
-    """
-
-    # 1) grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # 2) odszumianie
     denoise = cv2.fastNlMeansDenoising(gray, h=10)
 
-    # 3) threshold adaptacyjny (lepszy niż stały)
     thresh = cv2.adaptiveThreshold(
         denoise, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -52,11 +50,9 @@ def ocr_text(img: np.ndarray) -> str:
         31, 5
     )
 
-    # 4) OCR — pierwsza próba
     text = pytesseract.image_to_string(thresh, config="--psm 6")
     text = clean_text(text)
 
-    # 5) fallback — jeśli za mało znaków
     if len(text) < 3:
         fallback = pytesseract.image_to_string(denoise, config="--psm 6")
         fallback = clean_text(fallback)
@@ -113,16 +109,31 @@ def preprocess(img: np.ndarray) -> np.ndarray:
 #  INTERWAŁ
 # ============================================================
 
+INTERVALS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]
+
 def detect_interval(text: str) -> str:
-    intervals = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]
-    for i in intervals:
+    for i in INTERVALS:
         if i in text:
             return i
     return "UNKNOWN"
 
 
 # ============================================================
-#  TICKERY (słownik)
+#  AI AUTO-CORRECT INTERWAŁU
+# ============================================================
+
+def autocorrect_interval(raw: str) -> str:
+    if raw == "UNKNOWN":
+        return "UNKNOWN"
+
+    match, score, _ = process.extractOne(raw, INTERVALS, scorer=fuzz.ratio)
+    if score < 60:
+        return raw
+    return match
+
+
+# ============================================================
+#  TICKERY (słownik GPW)
 # ============================================================
 
 TICKER_MAP = {
@@ -212,33 +223,44 @@ BLACKLIST = {
 
 
 # ============================================================
-#  AI AUTO-CORRECT TICKERA (RapidFuzz)
+#  AI AUTO-CORRECT TICKERA
 # ============================================================
 
 ALL_TICKERS = list(TICKER_MAP.values())
 
-def autocorrect_ticker(raw: str) -> str:
-    """
-    AI fuzzy matching tickera:
-    - poprawia literówki
-    - poprawia błędy OCR
-    - dopasowuje do najbliższego tickera
-    """
+def detect_ticker_smart(text: str) -> str:
+    words = re.findall(r"[A-ZĄĆĘŁŃÓŚŹŻ]{2,6}", text)
+    candidates = []
+    for w in words:
+        if w in BLACKLIST:
+            continue
+        if any(ch.isdigit() for ch in w):
+            continue
+        candidates.append(w)
+    if not candidates:
+        return "UNKNOWN"
+    candidates.sort(key=len, reverse=True)
+    return candidates[0]
 
+
+def detect_ticker(text: str) -> str:
+    for name, ticker in TICKER_MAP.items():
+        if name in text:
+            return ticker
+    return detect_ticker_smart(text)
+
+
+def autocorrect_ticker(raw: str) -> str:
     if not raw or len(raw) < 2:
         return "UNKNOWN"
 
     raw = raw.strip().upper()
 
-    # Jeśli OCR zwrócił pełną nazwę spółki → mapowanie
     for name, ticker in TICKER_MAP.items():
         if name in raw:
             return ticker
 
-    # Fuzzy match do listy tickerów
     match, score, _ = process.extractOne(raw, ALL_TICKERS, scorer=fuzz.ratio)
-
-    # Jeśli dopasowanie słabe → odrzucamy
     if score < 60:
         return "UNKNOWN"
 
@@ -246,26 +268,50 @@ def autocorrect_ticker(raw: str) -> str:
 
 
 # ============================================================
-#  PARSOWANIE LICZB
+#  AI AUTO-CORRECT LICZB (O/H/L/C)
 # ============================================================
 
-def find_number(text: str, label: str):
-    m = re.search(rf"{label}\s*([0-9.,]+)", text)
-    if not m:
+def autocorrect_number(value):
+    if value is None:
         return None
-    return float(m.group(1).replace(",", "."))
 
+    s = str(value)
 
-def multi_find(text: str, labels):
-    for lbl in labels:
-        v = find_number(text, lbl)
-        if v is not None:
-            return v
-    return None
+    s = s.replace("O", "0")
+    s = s.replace("B", "8")
+    s = s.replace(",", ".")
+    s = re.sub(r"[^0-9.]", "", s)
+
+    try:
+        num = float(s)
+        if num <= 0:
+            return None
+        return num
+    except:
+        return None
 
 
 # ============================================================
-#  ENDPOINT OCR PRO
+#  AI WYKRYWANIE RYNKU
+# ============================================================
+
+USA_TICKERS = {"AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOG", "NFLX"}
+CRYPTO = {"BTC", "ETH", "SOL", "XRP", "ADA", "DOGE"}
+
+def detect_market(ticker: str) -> str:
+    if ticker in ALL_TICKERS:
+        return "GPW"
+    if ticker in USA_TICKERS:
+        return "USA"
+    if ticker in CRYPTO:
+        return "CRYPTO"
+    if len(ticker) == 6 and ticker.isalpha():
+        return "FOREX"
+    return "UNKNOWN"
+
+
+# ============================================================
+#  ENDPOINT OCR ULTRA PRO
 # ============================================================
 
 @app.post("/ocr")
@@ -279,40 +325,41 @@ async def ocr_endpoint(file: UploadFile = File(...)):
     if img is None:
         return {"error": "IMAGE_DECODE_FAILED"}
 
-    # OCR główny
     clean = preprocess(img)
     text = ocr_text(clean)
     log_ocr("MAIN", text, t0)
 
-    # OCR ticker
     ticker_img = crop_ticker_area(img)
     ticker_text = ocr_text(preprocess(ticker_img))
     log_ocr("TICKER", ticker_text, t0)
 
-    # AI Auto-Correct Tickera
     ticker_raw = detect_ticker(ticker_text)
     ticker = autocorrect_ticker(ticker_raw)
 
     if ticker == "UNKNOWN":
         ticker = autocorrect_ticker(detect_ticker(text))
 
-    interval = detect_interval(text)
+    interval_raw = detect_interval(text)
+    interval = autocorrect_interval(interval_raw)
 
-    O = find_number(text, "O")
-    H = find_number(text, "H")
-    L = find_number(text, "L")
-    C = find_number(text, "C")
+    O = autocorrect_number(find_number(text, "O"))
+    H = autocorrect_number(find_number(text, "H"))
+    L = autocorrect_number(find_number(text, "L"))
+    C = autocorrect_number(find_number(text, "C"))
 
-    MA20 = multi_find(text, ["MA20", "MA 20", "SMA20"])
-    EMA9 = multi_find(text, ["EMA9", "EMA 9"])
-    SMA50 = multi_find(text, ["SMA50", "SMA 50"])
-    DEMA9 = multi_find(text, ["DEMA9", "DEMA 9"])
-    RSI = multi_find(text, ["RSI"])
-    VOL = multi_find(text, ["WOLUMEN", "VOLUME", "VOL", "WOL"])
-    RVOL = multi_find(text, ["RVOL", "R-VOL", "REL VOL"])
+    MA20 = autocorrect_number(multi_find(text, ["MA20", "MA 20", "SMA20"]))
+    EMA9 = autocorrect_number(multi_find(text, ["EMA9", "EMA 9"]))
+    SMA50 = autocorrect_number(multi_find(text, ["SMA50", "SMA 50"]))
+    DEMA9 = autocorrect_number(multi_find(text, ["DEMA9", "DEMA 9"]))
+    RSI = autocorrect_number(multi_find(text, ["RSI"]))
+    VOL = autocorrect_number(multi_find(text, ["WOLUMEN", "VOLUME", "VOL", "WOL"]))
+    RVOL = autocorrect_number(multi_find(text, ["RVOL", "R-VOL", "REL VOL"]))
+
+    market = detect_market(ticker)
 
     return {
         "ticker": ticker,
+        "market": market,
         "interval": interval,
         "O": O,
         "H": H,
