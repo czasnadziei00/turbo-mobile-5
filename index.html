@@ -100,7 +100,7 @@ async function startOCR(dataUrl) {
   const form = new FormData();
   form.append("file", blob, "screen.png");
 
-  const res = await fetch("https://turbo-mobile-5-ocr.onrender.com/ocr", {
+  const res = await fetch("https://turbo-mobile-5.onrender.com/ocr", {
     method: "POST",
     body: form
   });
