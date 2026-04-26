@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import re
 import time
+from rapidfuzz import fuzz, process
 
 app = FastAPI()
 
@@ -21,7 +22,7 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"status": "OK", "engine": "tesseract-pro", "version": "1.0"}
+    return {"status": "OK", "engine": "tesseract-pro", "version": "1.1-ai-ticker"}
 
 
 # ============================================================
@@ -121,7 +122,7 @@ def detect_interval(text: str) -> str:
 
 
 # ============================================================
-#  TICKERY
+#  TICKERY (słownik)
 # ============================================================
 
 TICKER_MAP = {
@@ -209,26 +210,39 @@ BLACKLIST = {
     "HIGH", "LOW", "H", "L", "O", "C"
 }
 
-def detect_ticker_smart(text: str) -> str:
-    words = re.findall(r"[A-ZĄĆĘŁŃÓŚŹŻ]{2,6}", text)
-    candidates = []
-    for w in words:
-        if w in BLACKLIST:
-            continue
-        if any(ch.isdigit() for ch in w):
-            continue
-        candidates.append(w)
-    if not candidates:
+
+# ============================================================
+#  AI AUTO-CORRECT TICKERA (RapidFuzz)
+# ============================================================
+
+ALL_TICKERS = list(TICKER_MAP.values())
+
+def autocorrect_ticker(raw: str) -> str:
+    """
+    AI fuzzy matching tickera:
+    - poprawia literówki
+    - poprawia błędy OCR
+    - dopasowuje do najbliższego tickera
+    """
+
+    if not raw or len(raw) < 2:
         return "UNKNOWN"
-    candidates.sort(key=len, reverse=True)
-    return candidates[0]
 
+    raw = raw.strip().upper()
 
-def detect_ticker(text: str) -> str:
-    for k, t in TICKER_MAP.items():
-        if k in text:
-            return t
-    return detect_ticker_smart(text)
+    # Jeśli OCR zwrócił pełną nazwę spółki → mapowanie
+    for name, ticker in TICKER_MAP.items():
+        if name in raw:
+            return ticker
+
+    # Fuzzy match do listy tickerów
+    match, score, _ = process.extractOne(raw, ALL_TICKERS, scorer=fuzz.ratio)
+
+    # Jeśli dopasowanie słabe → odrzucamy
+    if score < 60:
+        return "UNKNOWN"
+
+    return match
 
 
 # ============================================================
@@ -275,9 +289,12 @@ async def ocr_endpoint(file: UploadFile = File(...)):
     ticker_text = ocr_text(preprocess(ticker_img))
     log_ocr("TICKER", ticker_text, t0)
 
-    ticker = detect_ticker(ticker_text)
+    # AI Auto-Correct Tickera
+    ticker_raw = detect_ticker(ticker_text)
+    ticker = autocorrect_ticker(ticker_raw)
+
     if ticker == "UNKNOWN":
-        ticker = detect_ticker(text)
+        ticker = autocorrect_ticker(detect_ticker(text))
 
     interval = detect_interval(text)
 
