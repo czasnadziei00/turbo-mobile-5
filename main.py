@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-import easyocr
+import pytesseract
 import cv2
 import numpy as np
 import re
@@ -15,10 +15,22 @@ app.add_middleware(
 )
 
 # ============================================================
-#  EASYOCR – LEKKI, DZIAŁA NA RENDER FREE
+#  TESSERACT OCR (pure python) – DZIAŁA NA RENDER FREE
 # ============================================================
 
-reader = easyocr.Reader(['en'], gpu=False)
+def ocr_text(img: np.ndarray) -> str:
+    # Tesseract expects grayscale or RGB
+    if len(img.shape) == 2:
+        gray = img
+    else:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Slight denoise + threshold
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    thresh = cv2.threshold(blur, 150, 255, cv2.THRESH_BINARY)[1]
+
+    text = pytesseract.image_to_string(thresh, config="--psm 6")
+    return clean_text(text)
 
 
 # ============================================================
@@ -52,17 +64,6 @@ def preprocess(img: np.ndarray) -> np.ndarray:
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
     thresh = cv2.threshold(blur, 150, 255, cv2.THRESH_BINARY)[1]
     return thresh
-
-
-# ============================================================
-#  OCR → TEKST (EASYOCR)
-# ============================================================
-
-def extract_text(img: np.ndarray) -> str:
-    result = reader.readtext(img, detail=0)
-    if not result:
-        return ""
-    return clean_text(" ".join(result))
 
 
 # ============================================================
@@ -221,10 +222,10 @@ async def ocr_endpoint(file: UploadFile = File(...)):
         return {"error": "IMAGE_DECODE_FAILED"}
 
     clean = preprocess(img)
-    text = extract_text(clean)
+    text = ocr_text(clean)
 
     ticker_img = crop_ticker_area(img)
-    ticker_text = extract_text(preprocess(ticker_img))
+    ticker_text = ocr_text(preprocess(ticker_img))
     ticker = detect_ticker(ticker_text)
 
     if ticker == "UNKNOWN":
