@@ -44,10 +44,6 @@ def health():
 
 
 def hf_ocr(image_bytes: bytes) -> str:
-    """
-    Lekki wrapper na HuggingFace OCR.
-    Zakładamy, że model zwraca plain text z całego screena XTB.
-    """
     headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
     resp = requests.post(
         HF_MODEL_URL,
@@ -58,13 +54,16 @@ def hf_ocr(image_bytes: bytes) -> str:
     resp.raise_for_status()
     data = resp.json()
 
-    # typowe formaty odpowiedzi HF: [{"generated_text": "..."}] albo {"text": "..."}
+    print("=== RAW HF RESPONSE ===")
+    print(data)
+
     if isinstance(data, list) and data and "generated_text" in data[0]:
         return data[0]["generated_text"]
     if isinstance(data, dict) and "text" in data:
         return data["text"]
-    # fallback – cokolwiek da się zrzutować na string
+
     return str(data)
+
 
 
 def _to_float(x: Optional[str]) -> Optional[float]:
