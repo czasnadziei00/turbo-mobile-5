@@ -48,7 +48,7 @@ def hf_ocr(image_bytes: bytes) -> str:
     resp = requests.post(
         HF_MODEL_URL,
         headers=headers,
-        data=image_bytes,
+        files={"file": image_bytes},
         timeout=60,
     )
     resp.raise_for_status()
@@ -63,6 +63,7 @@ def hf_ocr(image_bytes: bytes) -> str:
         return data["text"]
 
     return str(data)
+
 
 
 
