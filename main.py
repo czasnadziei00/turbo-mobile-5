@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from paddleocr import PaddleOCR
+import easyocr
 import cv2
 import numpy as np
 import re
@@ -15,15 +15,10 @@ app.add_middleware(
 )
 
 # ============================================================
-#  LAZY LOAD OCR (Render-friendly)
+#  EASYOCR – LEKKI, DZIAŁA NA RENDER FREE
 # ============================================================
 
-def get_ocr():
-    return PaddleOCR(
-        lang="en",
-        use_angle_cls=True,
-        ocr_version="PP-OCRv4"
-    )
+reader = easyocr.Reader(['en'], gpu=False)
 
 
 # ============================================================
@@ -60,15 +55,14 @@ def preprocess(img: np.ndarray) -> np.ndarray:
 
 
 # ============================================================
-#  OCR → TEKST
+#  OCR → TEKST (EASYOCR)
 # ============================================================
 
 def extract_text(img: np.ndarray) -> str:
-    ocr = get_ocr()  # LAZY LOAD
-    result = ocr.ocr(img, cls=True)
-    if not result or not result[0]:
+    result = reader.readtext(img, detail=0)
+    if not result:
         return ""
-    return clean_text(" ".join([line[1][0] for line in result[0]]))
+    return clean_text(" ".join(result))
 
 
 # ============================================================
