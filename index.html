@@ -18,7 +18,14 @@
     .signal-czekajdo  { color:#d4a000;font-weight:700; }
     .signal-uwagarese { color:#ff7f00;font-weight:700; }
     .signal-reset     { color:#b71c1c;font-weight:700; }
-  </style>
+
+    /* 🔥 TRAILING TP3 — CIEMNO ZIELONY PODŚWIETLONY WIERSZ */
+    .trail-active {
+      background-color: #0a4f0a !important;
+      color: white !important;
+    }
+</style>
+
 </head>
 
 <body>
@@ -216,8 +223,10 @@ function aktualizujSygnał(w) {
   if (cena < dol * 0.995 && momentum === "SŁABE") s = "UWAGA RESET";
   if (cena < L && momentum === "SŁABE") s = "RESET";
 
+  aktualizujTrailing(w);
   cell.innerText = s;
   kolorujSygnal(w, s);
+
 }
 
 /* ============================================================
@@ -235,6 +244,32 @@ function kolorujSygnal(w, s) {
   if (s === "UWAGA RESET")  cell.classList.add("signal-uwagarese");
   if (s === "RESET")        cell.classList.add("signal-reset");
 }
+function aktualizujTrailing(w) {
+  const cena = parseFloat(w.cells[2].querySelector("input").value);
+  const entry = parseFloat(w.cells[3].querySelector("input").value);
+
+  if (isNaN(cena) || isNaN(entry) || entry <= 0) return;
+
+  const tp3 = entry * 1.03;
+  const trailingSL = entry * 1.015;
+
+  w.dataset.TP3 = tp3.toFixed(3);
+  w.dataset.TRAILING_SL = trailingSL.toFixed(3);
+
+  // usuń poprzednie podświetlenie
+  w.classList.remove("trail-active");
+
+  // TP3 wybity → trailing aktywny → ciemno zielony
+  if (cena > tp3) {
+    w.classList.add("trail-active");
+  }
+
+  // trailing stop wybity → wyłącz trailing
+  if (cena < trailingSL) {
+    w.classList.remove("trail-active");
+  }
+}
+
 /* ============================================================
    KORELACJA KGHM ↔ MIEDŹ
    ============================================================ */
@@ -283,6 +318,31 @@ function zastosujKorelacjeKGHM(w) {
 
   cell.innerText = s;
   kolorujSygnal(w, s);
+}
+
+/* ============================================================
+   PEŁNY TP / TRAILING TP3
+   ============================================================ */
+
+function aktualizujTrailing(w) {
+  const cena = parseFloat(w.cells[2].querySelector("input").value);
+  const entry = parseFloat(w.cells[3].querySelector("input").value);
+
+  if (isNaN(cena) || isNaN(entry) || entry <= 0) return;
+
+  const tp1 = entry * 1.01;
+  const tp2 = entry * 1.02;
+  const tp3 = entry * 1.03;
+
+  w.dataset.TP1 = tp1.toFixed(3);
+  w.dataset.TP2 = tp2.toFixed(3);
+  w.dataset.TP3 = tp3.toFixed(3);
+
+  // trailing po wybiciu TP3
+  if (cena > tp3) {
+    const trailingSL = entry * 1.015; // ENTRY + 1.5%
+    w.dataset.TRAILING_SL = trailingSL.toFixed(3);
+  }
 }
 
 /* ============================================================
@@ -354,32 +414,110 @@ function usunWiersz(btn) {
   zapiszTabele();
 }
 /* ============================================================
-   MIKROFON
+   AKTYWNY WIERSZ (dla mikrofonu)
    ============================================================ */
 
-let recognition = null;
 let aktywnyWiersz = null;
+
+document.addEventListener("click", e => {
+  const tr = e.target.closest("tr");
+  if (tr && tr.dataset.ticker && tr.dataset.ticker !== "NEW") {
+    aktywnyWiersz = tr;
+  }
+});
+
+
+/* ============================================================
+   MIKROFON 2.0 — ticker + cena / sama cena
+   ============================================================ */
 
 function uruchomMikrofon(wiersz) {
   aktywnyWiersz = wiersz;
 
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) return alert("Brak wsparcia mikrofonu.");
-
-  recognition = new SpeechRecognition();
+  const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
   recognition.lang = "pl-PL";
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
   recognition.start();
 
   recognition.onresult = e => {
-    const tekst = e.results[0][0].transcript;
-    const liczba = tekst.replace(",", ".").match(/[0-9.]+/);
-    if (!liczba) return;
-
-    aktywnyWiersz.cells[2].querySelector("input").value = parseFloat(liczba[0]).toFixed(3);
-    aktualizujSygnał(aktywnyWiersz);
-    sortujPoSygnale();
-    zapiszTabele();
+    const tekst = e.results[0][0].transcript.trim();
+    obsluzTekstZMikrofonu(tekst);
   };
+
+  recognition.onerror = () => {
+    alert("Błąd mikrofonu");
+  };
+}
+
+function obsluzTekstZMikrofonu(tekst) {
+  const parts = tekst.toUpperCase().split(" ");
+
+  const liczba = parts.find(p => p.replace(",", ".").match(/^[0-9.]+$/));
+  const cena = liczba ? parseFloat(liczba.replace(",", ".")) : null;
+
+  const slowo = parts.find(p => isNaN(p) && p.length >= 3);
+  const ticker = slowo || null;
+
+  if (ticker && cena) {
+    ustawTickerICene(ticker, cena);
+    return;
+  }
+
+  if (!ticker && cena) {
+    ustawTylkoCene(cena);
+    return;
+  }
+
+  alert("Powiedz np. 'Dino 33.6' albo '33.6'");
+}
+
+function ustawTickerICene(ticker, cena) {
+  const tbody = document.getElementById("tbody");
+  let w = [...tbody.rows].find(r => r.dataset.ticker === ticker);
+
+  if (!w) {
+    w = tbody.insertRow(-1);
+    w.dataset.ticker = ticker;
+
+    w.insertCell(0).innerText = "📊";
+    w.insertCell(1).innerText = ticker;
+
+    w.insertCell(2).innerHTML = `<input class="price-input">`;
+    w.insertCell(3).innerHTML = `<input class="entry-input">`;
+
+    w.insertCell(4).innerText = "CZEKAJ";
+    w.insertCell(5).innerText = "—";
+    w.insertCell(6).innerText = "—";
+    w.insertCell(7).innerText = "—";
+    w.insertCell(8).innerText = "—";
+
+    w.insertCell(9).innerHTML = `<button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button>`;
+    w.insertCell(10).innerHTML = `<button onclick="document.getElementById('ocr-file-input').click()">📎</button>`;
+    w.insertCell(11).innerHTML = `<button onclick="usunWiersz(this);zapiszTabele()">🗑 Usuń</button>`;
+  }
+
+  aktywnyWiersz = w;
+
+  w.cells[2].querySelector("input").value = cena.toFixed(3);
+
+  aktualizujSygnał(w);
+  sortujPoSygnale();
+  zapiszTabele();
+}
+
+function ustawTylkoCene(cena) {
+  if (!aktywnyWiersz) {
+    alert("Najpierw kliknij wiersz, aby ustawić cenę głosem");
+    return;
+  }
+
+  aktywnyWiersz.cells[2].querySelector("input").value = cena.toFixed(3);
+
+  aktualizujSygnał(aktywnyWiersz);
+  sortujPoSygnale();
+  zapiszTabele();
 }
 
 /* ============================================================
