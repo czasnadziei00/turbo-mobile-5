@@ -86,7 +86,7 @@
 
 <script>
 /* ============================================================
-   OCR — backend TURBO OCR 3.0 (POPRAWIONE)
+   OCR — backend TURBO OCR 3.0 (POPRAWIONE + FALLBACK)
    ============================================================ */
 
 async function wczytajOCRZPlikow(event) {
@@ -113,12 +113,13 @@ async function startOCR(dataUrl) {
   });
 
   const d = await res.json();
+  console.log("OCR RESPONSE:", d);
   dodajLubAktualizujWiersz(d);
   zapiszTabele();
 }
 
 /* ============================================================
-   KONWERSJA dataURL → Blob (KLUCZOWE!)
+   KONWERSJA dataURL → Blob
    ============================================================ */
 
 function dataURLtoBlob(dataUrl) {
@@ -133,10 +134,16 @@ function dataURLtoBlob(dataUrl) {
 
 
 /* ============================================================
-   TWORZENIE / AKTUALIZACJA WIERSZA
+   TWORZENIE / AKTUALIZACJA WIERSZA + FALLBACK OCR
    ============================================================ */
 
 function dodajLubAktualizujWiersz(d) {
+  // fallback: jeśli OCR nie zwrócił tickera → użyj aktywnego wiersza
+  if (!d.ticker && aktywnyWiersz) {
+    d.ticker = aktywnyWiersz.dataset.ticker;
+  }
+  if (!d.ticker) return;
+
   const tbody = document.getElementById("tbody");
   let w = [...tbody.rows].find(r => r.dataset.ticker === d.ticker);
 
@@ -164,10 +171,13 @@ function dodajLubAktualizujWiersz(d) {
   w.dataset.interval = d.interval;
 
   if (d.interval === "M5") {
-    if (d.C) w.cells[2].querySelector("input").value = d.C.toFixed(3);
+    if (d.C) {
+      w.cells[2].querySelector("input").value = d.C.toFixed(3);
+      w.dataset.C = d.C;
+    }
     if (d.DEMA9) w.dataset.DEMA9 = d.DEMA9;
-    if (d.RSI) w.dataset.RSI = d.RSI;
-    if (d.VOL) w.dataset.VOL = d.VOL;
+    if (d.RSI)   w.dataset.RSI   = d.RSI;
+    if (d.VOL)   w.dataset.VOL   = d.VOL;
   }
 
   if (d.interval === "M15") {
@@ -186,7 +196,7 @@ function dodajLubAktualizujWiersz(d) {
   if (d.O) w.dataset.O = d.O;
   if (d.H) w.dataset.H = d.H;
   if (d.L) w.dataset.L = d.L;
-  if (d.C) w.dataset.C = d.C;
+  if (d.C && !w.dataset.C) w.dataset.C = d.C;
 
   aktualizujSygnał(w);
   zapiszDaneDoKorelacji(d);
@@ -194,6 +204,7 @@ function dodajLubAktualizujWiersz(d) {
   sortujPoSygnale();
   zapiszTabele();
 }
+
 
 /* ============================================================
    SYGNAŁ 4.5
@@ -207,27 +218,27 @@ function aktualizujSygnał(w) {
 
   const [dol, gor] = w.cells[5].innerText.split("–").map(parseFloat);
 
-  const L = parseFloat(w.dataset.L || 0);
-  const MA20 = parseFloat(w.dataset.MA20 || 0);
+  const L     = parseFloat(w.dataset.L     || 0);
+  const MA20  = parseFloat(w.dataset.MA20  || 0);
   const DEMA9 = parseFloat(w.dataset.DEMA9 || 0);
 
   const momentum = (DEMA9 && cena > DEMA9) ? "MOCNE" : "SŁABE";
-  const bias = (MA20 && cena > MA20) ? "UP" : "DOWN";
+  const bias     = (MA20 && cena > MA20)   ? "UP"   : "DOWN";
 
   let s = "CZEKAJ";
 
   if (cena < dol) s = "CZEKAJ DO";
-  if (cena >= dol && cena <= gor && momentum === "SŁABE") s = "PRAWIE BUY";
+  if (cena >= dol && cena <= gor && momentum === "SŁABE")                  s = "PRAWIE BUY";
   if (cena >= dol && cena <= gor && momentum === "MOCNE" && bias === "UP") s = "BUY";
   if (cena > gor) s = "CZEKAJ";
   if (cena < dol * 0.995 && momentum === "SŁABE") s = "UWAGA RESET";
-  if (cena < L && momentum === "SŁABE") s = "RESET";
+  if (cena < L && momentum === "SŁABE")           s = "RESET";
 
   aktualizujTrailing(w);
   cell.innerText = s;
   kolorujSygnal(w, s);
-
 }
+
 
 /* ============================================================
    KOLORY SYGNAŁÓW
@@ -244,42 +255,51 @@ function kolorujSygnal(w, s) {
   if (s === "UWAGA RESET")  cell.classList.add("signal-uwagarese");
   if (s === "RESET")        cell.classList.add("signal-reset");
 }
+
+
+/* ============================================================
+   PEŁNY TP / TRAILING TP3 + PODŚWIETLENIE WIERSZA
+   ============================================================ */
+
 function aktualizujTrailing(w) {
-  const cena = parseFloat(w.cells[2].querySelector("input").value);
+  const cena  = parseFloat(w.cells[2].querySelector("input").value);
   const entry = parseFloat(w.cells[3].querySelector("input").value);
 
   if (isNaN(cena) || isNaN(entry) || entry <= 0) return;
 
+  const tp1 = entry * 1.01;
+  const tp2 = entry * 1.02;
   const tp3 = entry * 1.03;
-  const trailingSL = entry * 1.015;
 
+  w.dataset.TP1 = tp1.toFixed(3);
+  w.dataset.TP2 = tp2.toFixed(3);
   w.dataset.TP3 = tp3.toFixed(3);
+
+  const trailingSL = entry * 1.015;
   w.dataset.TRAILING_SL = trailingSL.toFixed(3);
 
-  // usuń poprzednie podświetlenie
   w.classList.remove("trail-active");
 
-  // TP3 wybity → trailing aktywny → ciemno zielony
   if (cena > tp3) {
     w.classList.add("trail-active");
   }
 
-  // trailing stop wybity → wyłącz trailing
   if (cena < trailingSL) {
     w.classList.remove("trail-active");
   }
 }
+
 
 /* ============================================================
    KORELACJA KGHM ↔ MIEDŹ
    ============================================================ */
 
 let lastCopper = null;
-let lastKGHM = null;
+let lastKGHM   = null;
 
 function zapiszDaneDoKorelacji(d) {
   if (d.ticker === "COPPER") lastCopper = d;
-  if (d.ticker === "KGH")    lastKGHM = d;
+  if (d.ticker === "KGH")    lastKGHM   = d;
 }
 
 function zastosujKorelacjeKGHM(w) {
@@ -289,9 +309,9 @@ function zastosujKorelacjeKGHM(w) {
   const cell = w.cells[4];
   let s = cell.innerText;
 
-  const cH = lastCopper.H;
-  const cL = lastCopper.L;
-  const cC = lastCopper.C;
+  const cH  = lastCopper.H;
+  const cL  = lastCopper.L;
+  const cC  = lastCopper.C;
   const cMA = lastCopper.MA20;
 
   if (!cH || !cL || !cC) return;
@@ -320,30 +340,6 @@ function zastosujKorelacjeKGHM(w) {
   kolorujSygnal(w, s);
 }
 
-/* ============================================================
-   PEŁNY TP / TRAILING TP3
-   ============================================================ */
-
-function aktualizujTrailing(w) {
-  const cena = parseFloat(w.cells[2].querySelector("input").value);
-  const entry = parseFloat(w.cells[3].querySelector("input").value);
-
-  if (isNaN(cena) || isNaN(entry) || entry <= 0) return;
-
-  const tp1 = entry * 1.01;
-  const tp2 = entry * 1.02;
-  const tp3 = entry * 1.03;
-
-  w.dataset.TP1 = tp1.toFixed(3);
-  w.dataset.TP2 = tp2.toFixed(3);
-  w.dataset.TP3 = tp3.toFixed(3);
-
-  // trailing po wybiciu TP3
-  if (cena > tp3) {
-    const trailingSL = entry * 1.015; // ENTRY + 1.5%
-    w.dataset.TRAILING_SL = trailingSL.toFixed(3);
-  }
-}
 
 /* ============================================================
    SORTOWANIE WG SYGNAŁU
@@ -370,6 +366,7 @@ function sortujPoSygnale() {
   rows.forEach(r => tbody.appendChild(r));
 }
 
+
 /* ============================================================
    RESET — czyści wszystko oprócz ENTRY
    ============================================================ */
@@ -381,7 +378,7 @@ function resetTabeli() {
     if (r.dataset.ticker === "NEW") return;
 
     const ticker = r.dataset.ticker;
-    const entry = r.cells[3].querySelector("input").value;
+    const entry  = r.cells[3].querySelector("input").value;
 
     r.innerHTML = `
       <td>📊</td>
@@ -404,6 +401,7 @@ function resetTabeli() {
   zapiszTabele();
 }
 
+
 /* ============================================================
    USUWANIE WIERSZA
    ============================================================ */
@@ -413,8 +411,10 @@ function usunWiersz(btn) {
   row.remove();
   zapiszTabele();
 }
+
+
 /* ============================================================
-   AKTYWNY WIERSZ (dla mikrofonu)
+   AKTYWNY WIERSZ (mikrofon + fallback OCR)
    ============================================================ */
 
 let aktywnyWiersz = null;
@@ -520,6 +520,7 @@ function ustawTylkoCene(cena) {
   zapiszTabele();
 }
 
+
 /* ============================================================
    LOCALSTORAGE — PAMIĘĆ TABELI
    ============================================================ */
@@ -529,19 +530,19 @@ function zapiszTabele() {
   const data = [...tbody.rows]
     .filter(r => r.dataset.ticker !== "NEW")
     .map(r => ({
-      ticker: r.dataset.ticker,
-      price: r.cells[2].querySelector("input").value,
-      entry: r.cells[3].querySelector("input").value,
+      ticker:  r.dataset.ticker,
+      price:   r.cells[2].querySelector("input").value,
+      entry:   r.cells[3].querySelector("input").value,
       widełki: r.cells[5].innerText,
-      O: r.dataset.O,
-      H: r.dataset.H,
-      L: r.dataset.L,
-      C: r.dataset.C,
-      MA20: r.dataset.MA20,
-      DEMA9: r.dataset.DEMA9,
-      RSI: r.dataset.RSI,
-      VOL: r.dataset.VOL,
-      interval: r.dataset.interval
+      O:       r.dataset.O,
+      H:       r.dataset.H,
+      L:       r.dataset.L,
+      C:       r.dataset.C,
+      MA20:    r.dataset.MA20,
+      DEMA9:   r.dataset.DEMA9,
+      RSI:     r.dataset.RSI,
+      VOL:     r.dataset.VOL,
+      interval:r.dataset.interval
     }));
 
   localStorage.setItem("tabela", JSON.stringify(data));
@@ -553,7 +554,6 @@ function wczytajTabele() {
 }
 
 wczytajTabele();
-
 </script>
 
 </body>
