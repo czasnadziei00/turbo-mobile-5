@@ -112,10 +112,11 @@ async function startOCR(dataUrl) {
     body: form
   });
 
-  const d = await res.json();
-  console.log("OCR RESPONSE:", d);
-  dodajLubAktualizujWiersz(d);
-  zapiszTabele();
+const d = await res.json();
+console.log("OCR RESPONSE:", d);
+dodajLubAktualizujWiersz(d);
+zapiszTabele();
+
 }
 
 /* ============================================================
