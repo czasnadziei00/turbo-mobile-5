@@ -79,7 +79,7 @@
 
 <script>
 /* ============================================================
-   OCR — backend TURBO OCR 3.0
+   OCR — backend TURBO OCR 3.0 (POPRAWIONE)
    ============================================================ */
 
 async function wczytajOCRZPlikow(event) {
@@ -96,7 +96,7 @@ async function wczytajOCRZPlikow(event) {
 }
 
 async function startOCR(dataUrl) {
-  const blob = await (await fetch(dataUrl)).blob();
+  const blob = dataURLtoBlob(dataUrl);
   const form = new FormData();
   form.append("file", blob, "screen.png");
 
@@ -109,6 +109,21 @@ async function startOCR(dataUrl) {
   dodajLubAktualizujWiersz(d);
   zapiszTabele();
 }
+
+/* ============================================================
+   KONWERSJA dataURL → Blob (KLUCZOWE!)
+   ============================================================ */
+
+function dataURLtoBlob(dataUrl) {
+  const arr = dataUrl.split(',');
+  const mime = arr[0].match(/:(.*?);/)[1];
+  const bstr = atob(arr[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) u8arr[n] = bstr.charCodeAt(n);
+  return new Blob([u8arr], { type: mime });
+}
+
 
 /* ============================================================
    TWORZENIE / AKTUALIZACJA WIERSZA
