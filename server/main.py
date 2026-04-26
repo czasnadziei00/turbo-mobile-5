@@ -17,14 +17,9 @@ app.add_middleware(
 ocr = PaddleOCR(
     lang="en",
     use_angle_cls=True,
-    use_gpu=False,
-    use_mp=False,
-    ocr_version="PP-OCRv4",
-    det_model_dir=None,
-    rec_model_dir=None,
-    cls_model_dir=None,
-    use_onnx=True
+    ocr_version="PP-OCRv4"
 )
+
 
 
 # ============================================================
