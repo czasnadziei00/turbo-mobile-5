@@ -3,9 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>TURBO OCR 2.0 REAL — XTB Edition</title>
-
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+  <title>TURBO MOBILE 5 — OCR 3.0</title>
 
   <style>
     body { font-family: Arial; background:#f6f7fb; margin:20px; }
@@ -13,13 +11,6 @@
     th, td { padding:8px 10px; border-bottom:1px solid #eee; font-size:13px; }
     th { background:#fafafa; font-weight:600; }
     button { padding:6px 8px; cursor:pointer; border-radius:4px; }
-
-    .popup {
-      display:none; position:fixed; z-index:9999;
-      left:50%; top:50%; transform:translate(-50%,-50%);
-      background:white; border:2px solid #222;
-      padding:16px; width:360px; max-height:80vh; overflow:auto;
-    }
 
     .signal-buy       { color:#0a7a3a; font-weight:700; }
     .signal-prawiebuy { color:#7ac70c; font-weight:700; }
@@ -32,6 +23,10 @@
 
 <body>
 
+<button onclick="resetTabeli()" style="margin-bottom:15px;background:#ff4444;color:white;">
+  🔄 RESET (czyści wszystko oprócz ENTRY)
+</button>
+
 <input 
   type="file"
   id="ocr-file-input"
@@ -41,7 +36,7 @@
   onchange="wczytajOCRZPlikow(event)"
 >
 
-<h1>TURBO OCR 2.0 REAL — XTB Edition</h1>
+<h1>TURBO MOBILE 5 — XTB + TURBO OCR 3.0</h1>
 
 <table id="main-table">
   <thead>
@@ -61,77 +56,13 @@
     </tr>
   </thead>
 
-  <tbody>
-    <tr>
-      <td>📊</td>
-      <td>—</td>
-      <td><input class="price-input" oninput="aktualizujSygnał(this.closest('tr'))"></td>
-      <td><input class="entry-input" oninput="sortujPoSygnale()"></td>
-      <td class="signal-czekaj">CZEKAJ</td>
-      <td>—</td>
-      <td>—</td>
-      <td>—</td>
-      <td>—</td>
-      <td><button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button></td>
-      <td><button onclick="document.getElementById('ocr-file-input').click()">📎</button></td>
-      <td><button onclick="usunWiersz(this)">🗑 Usuń</button></td>
-    </tr>
-  </tbody>
+  <tbody id="tbody"></tbody>
 </table>
-
-<!-- POPUP OCR -->
-<div id="popup-ocr" class="popup">
-  <h2>OCR — podgląd</h2>
-  <pre id="popup-ocr-raw" style="white-space:pre-wrap;font-size:11px;"></pre>
-  <button onclick="zatwierdzOCR()">Użyj danych</button>
-  <button onclick="zamknijPopupOCR()">Anuluj</button>
-</div>
 
 <script>
 /* ============================================================
-   PREPROCESSING OBRAZU (REAL)
+   OCR — backend TURBO OCR 3.0
    ============================================================ */
-
-async function preprocessImage(dataUrl) {
-  return new Promise(resolve => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-
-      canvas.width = img.width;
-      canvas.height = img.height;
-
-      ctx.drawImage(img, 0, 0);
-
-      let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      let data = imageData.data;
-
-      // grayscale
-      for (let i = 0; i < data.length; i += 4) {
-        const avg = (data[i] + data[i+1] + data[i+2]) / 3;
-        data[i] = data[i+1] = data[i+2] = avg;
-      }
-
-      // threshold (binaryzacja)
-      for (let i = 0; i < data.length; i += 4) {
-        const v = data[i] > 140 ? 255 : 0;
-        data[i] = data[i+1] = data[i+2] = v;
-      }
-
-      ctx.putImageData(imageData, 0, 0);
-
-      resolve(canvas.toDataURL());
-    };
-    img.src = dataUrl;
-  });
-}
-
-/* ============================================================
-   OCR — wczytywanie
-   ============================================================ */
-
-let ostatniTekstOCR = "";
 
 async function wczytajOCRZPlikow(event) {
   const pliki = event.target.files;
@@ -145,6 +76,7 @@ async function wczytajOCRZPlikow(event) {
 
   event.target.value = "";
 }
+
 async function startOCR(dataUrl) {
   const blob = await (await fetch(dataUrl)).blob();
   const form = new FormData();
@@ -155,124 +87,9 @@ async function startOCR(dataUrl) {
     body: form
   });
 
-  const data = await res.json();
-  dodajLubAktualizujWiersz(data);
-}
-
-
-
-function zatwierdzOCR() {
-  if (ostatniTekstOCR) przetworzTekstOCR(ostatniTekstOCR);
-  zamknijPopupOCR();
-}
-
-function zamknijPopupOCR() {
-  document.getElementById("popup-ocr").style.display = "none";
-}
-
-/* ============================================================
-   NORMALIZACJA LICZB (XTB)
-   ============================================================ */
-
-function normalizujLiczbe(x) {
-  if (!x) return null;
-
-  x = x.replace(/[^\d,.\s]/g, "").replace(/\s+/g, "");
-
-  if (!x.includes(",") && !x.includes(".") && x.length > 3) {
-    x = x.slice(0, -2) + "," + x.slice(-2);
-  }
-
-  return parseFloat(x.replace(",", "."));
-}
-
-/* ============================================================
-   FUZZY NAZWY SPÓŁEK (XTB)
-   ============================================================ */
-
-function generujTickerZNazwy(text) {
-  const upper = text.toUpperCase();
-
-  const mapowania = [
-    { nazwy: ["GRUPA KETY", "GRUPA KĘTY", "KETY", "KĘTY"], ticker: "KTY" },
-    { nazwy: ["CD PROJEKT", "CDPROJEKT"], ticker: "CDR" },
-    { nazwy: ["ALLEGRO"], ticker: "ALE" },
-    { nazwy: ["ORLEN", "PKN ORLEN"], ticker: "PKN" },
-    { nazwy: ["ASBIS"], ticker: "ASB" },
-    { nazwy: ["XTB"], ticker: "XTB" },
-    { nazwy: ["JSW"], ticker: "JSW" },
-    { nazwy: ["MBANK"], ticker: "MBK" }
-  ];
-
-  for (const m of mapowania) {
-    for (const n of m.nazwy) {
-      if (upper.includes(n)) return m.ticker;
-    }
-  }
-
-  return null;
-}
-
-/* ============================================================
-   FALLBACK — skróty
-   ============================================================ */
-
-function wykryjTickerZeSkrotow(text) {
-  const upper = text.toUpperCase();
-  const matches = upper.match(/\b[A-Z]{2,5}\b/g) || [];
-
-  const blacklist = new Set([
-    "GPW","W","MA","RSI","VOL","WOL","EXP","EMA","OPEN","HIGH","LOW","CLOSE",
-    "O","H","L","C","MIN","MAX","BUY","SELL","LONG","SHORT","STOP","LOSS",
-    "TF","UTC","LOG","PT","ST","ND","RD","TH","AUTO"
-  ]);
-
-  for (const m of matches) {
-    if (!blacklist.has(m)) return m;
-  }
-
-  return null;
-}
-
-/* ============================================================
-   GŁÓWNE WYKRYWANIE TICKERA
-   ============================================================ */
-
-function wykryjTicker(text) {
-  const zNazwy = generujTickerZNazwy(text);
-  if (zNazwy) return zNazwy;
-
-  const zeSkrotu = wykryjTickerZeSkrotow(text);
-  if (zeSkrotu) return zeSkrotu;
-
-  return "UNKNOWN";
-}
-
-/* ============================================================
-   PARSER XTB — TURBO OCR 2.0 REAL
-   ============================================================ */
-
-function przetworzTekstOCR(t) {
-  t = t.replace(/\n/g, " ");
-
-  const ticker = wykryjTicker(t);
-
-  const O = normalizujLiczbe((t.match(/O\s*([0-9\s.,]+)/i) || [null,null])[1]);
-  const H = normalizujLiczbe((t.match(/H\s*([0-9\s.,]+)/i) || [null,null])[1]);
-  const L = normalizujLiczbe((t.match(/L\s*([0-9\s.,]+)/i) || [null,null])[1]);
-  const C = normalizujLiczbe((t.match(/C\s*([0-9\s.,]+)/i) || [null,null])[1]);
-
-  const MA20 = normalizujLiczbe((t.match(/MA\s*20[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
-
-  let DEMA9 = null;
-  const demaBlock = t.match(/PODWÓJNA\s+ŚREDNIA[^0-9]*([0-9\s.,]+)\s+([0-9\s.,]+)/i);
-  if (demaBlock) DEMA9 = normalizujLiczbe(demaBlock[1]);
-
-  const RSI = normalizujLiczbe((t.match(/RSI[-\s]*14[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
-
-  const VOL = normalizujLiczbe((t.match(/WOLUMEN[^0-9]*([0-9\s.,]+)/i) || [null,null])[1]);
-
-  dodajLubAktualizujWiersz({ ticker, O, H, L, C, MA20, DEMA9, VOL, RVOL:null });
+  const d = await res.json();
+  dodajLubAktualizujWiersz(d);
+  zapiszTabele();
 }
 
 /* ============================================================
@@ -280,24 +97,18 @@ function przetworzTekstOCR(t) {
    ============================================================ */
 
 function dodajLubAktualizujWiersz(d) {
-  const tabela = document.getElementById("main-table");
-  let w = null;
-
-  for (let i = 1; i < tabela.rows.length; i++) {
-    if (tabela.rows[i].cells[1].innerText === d.ticker) {
-      w = tabela.rows[i];
-      break;
-    }
-  }
+  const tbody = document.getElementById("tbody");
+  let w = [...tbody.rows].find(r => r.dataset.ticker === d.ticker);
 
   if (!w) {
-    w = tabela.insertRow(-1);
+    w = tbody.insertRow(-1);
+    w.dataset.ticker = d.ticker;
 
     w.insertCell(0).innerText = "📊";
     w.insertCell(1).innerText = d.ticker;
 
-    w.insertCell(2).innerHTML = `<input class="price-input" oninput="aktualizujSygnał(this.closest('tr'))">`;
-    w.insertCell(3).innerHTML = `<input class="entry-input" oninput="sortujPoSygnale()">`;
+    w.insertCell(2).innerHTML = `<input class="price-input" oninput="aktualizujSygnał(this.closest('tr'));zapiszTabele()">`;
+    w.insertCell(3).innerHTML = `<input class="entry-input" oninput="zapiszTabele()">`;
 
     w.insertCell(4).innerText = "CZEKAJ";
     w.insertCell(5).innerText = "—";
@@ -307,27 +118,49 @@ function dodajLubAktualizujWiersz(d) {
 
     w.insertCell(9).innerHTML  = `<button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button>`;
     w.insertCell(10).innerHTML = `<button onclick="document.getElementById('ocr-file-input').click()">📎</button>`;
-    w.insertCell(11).innerHTML = `<button onclick="usunWiersz(this)">🗑 Usuń</button>`;
+    w.insertCell(11).innerHTML = `<button onclick="usunWiersz(this);zapiszTabele()">🗑 Usuń</button>`;
   }
 
-  if (d.C) w.cells[2].querySelector("input").value = d.C.toFixed(3);
+  w.dataset.interval = d.interval;
 
-  if (d.H && d.L) {
-    const dol = d.L + (d.H - d.L) * 0.20;
-    const gor = d.L + (d.H - d.L) * 0.35;
-    w.cells[5].innerText = dol.toFixed(3) + "–" + gor.toFixed(3);
+  if (d.interval === "M5") {
+    if (d.C) w.cells[2].querySelector("input").value = d.C.toFixed(3);
+    if (d.DEMA9) w.dataset.DEMA9 = d.DEMA9;
+    if (d.RSI) w.dataset.RSI = d.RSI;
+    if (d.VOL) w.dataset.VOL = d.VOL;
   }
 
-  if (d.O)     w.dataset.O     = d.O;
-  if (d.H)     w.dataset.H     = d.H;
-  if (d.L)     w.dataset.L     = d.L;
-  if (d.C)     w.dataset.C     = d.C;
-  if (d.MA20)  w.dataset.MA20  = d.MA20;
-  if (d.DEMA9) w.dataset.DEMA9 = d.DEMA9;
-  if (d.VOL)   w.dataset.VOL   = d.VOL;
+ if (d.interval === "M15") {
+    if (d.H && d.L) {
+      const dol = d.L + (d.H - d.L) * 0.20;
+      const gor = d.L + (d.H - d.L) * 0.35;
+      w.cells[5].innerText = dol.toFixed(3) + "–" + gor.toFixed(3);
+    }
+    if (d.MA20) w.dataset.MA20 = d.MA20;
+}
 
-  aktualizujSygnał(w);
-  sortujPoSygnale();
+if (d.interval === "H1" || d.interval === "D1") {
+    if (d.MA20) w.dataset.MA20 = d.MA20;
+}
+
+if (d.O) w.dataset.O = d.O;
+if (d.H) w.dataset.H = d.H;
+if (d.L) w.dataset.L = d.L;
+if (d.C) w.dataset.C = d.C;
+
+// USTAWIAMY TICKER W DATASET (ważne dla korelacji!)
+w.dataset.ticker = d.ticker;
+
+// sygnał 4.5
+aktualizujSygnał(w);
+
+// korelacja KGHM ↔ COPPER
+zapiszDaneDoKorelacji(d);
+zastosujKorelacjeKGHM(w);
+
+// sortowanie + zapis
+sortujPoSygnale();
+zapiszTabele();
 }
 
 /* ============================================================
@@ -352,20 +185,64 @@ function aktualizujSygnał(w) {
   let s = "CZEKAJ";
 
   if (cena < dol) s = "CZEKAJ DO";
-
-  if (cena >= dol && cena <= gor && momentum === "SŁABE")
-      s = "PRAWIE BUY";
-
-  if (cena >= dol && cena <= gor && momentum === "MOCNE" && bias === "UP")
-      s = "BUY";
-
+  if (cena >= dol && cena <= gor && momentum === "SŁABE") s = "PRAWIE BUY";
+  if (cena >= dol && cena <= gor && momentum === "MOCNE" && bias === "UP") s = "BUY";
   if (cena > gor) s = "CZEKAJ";
+  if (cena < dol * 0.995 && momentum === "SŁABE") s = "UWAGA RESET";
+  if (cena < L && momentum === "SŁABE") s = "RESET";
 
-  if (cena < dol * 0.995 && momentum === "SŁABE")
-      s = "UWAGA RESET";
+  cell.innerText = s;
+  kolorujSygnal(w, s);
+}
+/* ============================================================
+   KORELACJA KGHM ↔ MIEDŹ
+   ============================================================ */
 
-  if (cena < L && momentum === "SŁABE")
-      s = "RESET";
+let lastCopper = null;
+let lastKGHM = null;
+
+function zapiszDaneDoKorelacji(d) {
+  if (d.ticker === "COPPER") lastCopper = d;
+  if (d.ticker === "KGH")    lastKGHM = d;
+}
+
+function zastosujKorelacjeKGHM(w) {
+  if (!lastCopper || !lastKGHM) return;
+  if (w.dataset.ticker !== "KGH") return;
+
+  const cell = w.cells[4];
+  let s = cell.innerText;
+
+  // dane copper
+  const cH = lastCopper.H;
+  const cL = lastCopper.L;
+  const cC = lastCopper.C;
+  const cMA = lastCopper.MA20;
+
+  if (!cH || !cL || !cC) return;
+
+  // 1. Copper RESET → KGHM RESET
+  if (cC < cL) {
+    s = "RESET";
+    cell.innerText = s;
+    kolorujSygnal(w, s);
+    return;
+  }
+
+  // 2. Copper BUY zone
+  const copperBuy =
+    cC > cL + (cH - cL) * 0.20 &&
+    cC < cL + (cH - cL) * 0.35;
+
+  if (copperBuy) {
+    if (s === "PRAWIE BUY") s = "BUY";
+    if (s === "CZEKAJ DO")  s = "PRAWIE BUY";
+  }
+
+  // 3. Copper bias
+  if (cMA && cC > cMA) {
+    if (s === "CZEKAJ") s = "PRAWIE BUY";
+  }
 
   cell.innerText = s;
   kolorujSygnal(w, s);
@@ -377,15 +254,7 @@ function aktualizujSygnał(w) {
 
 function kolorujSygnal(w, s) {
   const cell = w.cells[4];
-
-  cell.classList.remove(
-    "signal-buy",
-    "signal-prawiebuy",
-    "signal-czekaj",
-    "signal-czekajdo",
-    "signal-uwagarese",
-    "signal-reset"
-  );
+  cell.className = "";
 
   if (s === "BUY")          cell.classList.add("signal-buy");
   if (s === "PRAWIE BUY")   cell.classList.add("signal-prawiebuy");
@@ -400,8 +269,8 @@ function kolorujSygnal(w, s) {
    ============================================================ */
 
 function sortujPoSygnale() {
-  const tabela = document.getElementById("main-table");
-  const rows = Array.from(tabela.rows).slice(1);
+  const tbody = document.getElementById("tbody");
+  const rows = [...tbody.rows];
 
   const priorytet = { 
     "BUY":1, 
@@ -417,9 +286,36 @@ function sortujPoSygnale() {
     (priorytet[b.cells[4].innerText]||99)
   );
 
-  rows.forEach(r => tabela.appendChild(r));
+  rows.forEach(r => tbody.appendChild(r));
 }
 
+/* ============================================================
+   RESET — czyści wszystko oprócz ENTRY
+   ============================================================ */
+
+function resetTabeli() {
+  const tbody = document.getElementById("tbody");
+
+  [...tbody.rows].forEach(r => {
+    const entry = r.cells[3].querySelector("input").value;
+    r.innerHTML = `
+      <td>📊</td>
+      <td>${r.dataset.ticker}</td>
+      <td><input class="price-input" oninput="aktualizujSygnał(this.closest('tr'));zapiszTabele()"></td>
+      <td><input class="entry-input" value="${entry}" oninput="zapiszTabele()"></td>
+      <td class="signal-czekaj">CZEKAJ</td>
+      <td>—</td>
+      <td>—</td>
+      <td>—</td>
+      <td>—</td>
+      <td><button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button></td>
+      <td><button onclick="document.getElementById('ocr-file-input').click()">📎</button></td>
+      <td><button onclick="usunWiersz(this);zapiszTabele()">🗑 Usuń</button></td>
+    `;
+  });
+
+  zapiszTabele();
+}
 /* ============================================================
    MIKROFON
    ============================================================ */
@@ -430,48 +326,57 @@ let aktywnyWiersz = null;
 function uruchomMikrofon(wiersz) {
   aktywnyWiersz = wiersz;
 
-  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-    alert("Twoja przeglądarka nie obsługuje mikrofonu.");
-    return;
-  }
-
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) return alert("Brak wsparcia mikrofonu.");
+
   recognition = new SpeechRecognition();
-
   recognition.lang = "pl-PL";
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
-
   recognition.start();
 
-  recognition.onresult = function(event) {
-    const tekst = event.results[0][0].transcript;
+  recognition.onresult = e => {
+    const tekst = e.results[0][0].transcript;
     const liczba = tekst.replace(",", ".").match(/[0-9.]+/);
+    if (!liczba) return;
 
-    if (!liczba) return alert("Nie rozpoznano liczby.");
-
-    const cena = parseFloat(liczba[0]);
-    if (isNaN(cena)) return alert("Niepoprawna liczba.");
-
-    aktywnyWiersz.cells[2].querySelector("input").value = cena.toFixed(3);
-
+    aktywnyWiersz.cells[2].querySelector("input").value = parseFloat(liczba[0]).toFixed(3);
     aktualizujSygnał(aktywnyWiersz);
     sortujPoSygnale();
-  };
-
-  recognition.onerror = function() {
-    alert("Błąd mikrofonu.");
+    zapiszTabele();
   };
 }
 
 /* ============================================================
-   USUWANIE WIERSZA
+   LOCALSTORAGE — PAMIĘĆ TABELI
    ============================================================ */
 
-function usunWiersz(btn) {
-  const tr = btn.closest("tr");
-  if (tr) tr.remove();
+function zapiszTabele() {
+  const tbody = document.getElementById("tbody");
+  const data = [...tbody.rows].map(r => ({
+    ticker: r.dataset.ticker,
+    price: r.cells[2].querySelector("input").value,
+    entry: r.cells[3].querySelector("input").value,
+    widełki: r.cells[5].innerText,
+    O: r.dataset.O,
+    H: r.dataset.H,
+    L: r.dataset.L,
+    C: r.dataset.C,
+    MA20: r.dataset.MA20,
+    DEMA9: r.dataset.DEMA9,
+    RSI: r.dataset.RSI,
+    VOL: r.dataset.VOL,
+    interval: r.dataset.interval
+  }));
+
+  localStorage.setItem("tabela", JSON.stringify(data));
 }
+
+function wczytajTabele() {
+  const data = JSON.parse(localStorage.getItem("tabela") || "[]");
+  data.forEach(d => dodajLubAktualizujWiersz(d));
+}
+
+wczytajTabele();
+
 </script>
 
 </body>
