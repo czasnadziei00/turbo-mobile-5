@@ -4,6 +4,7 @@ import pytesseract
 import cv2
 import numpy as np
 import re
+import time
 
 app = FastAPI()
 
@@ -15,26 +16,66 @@ app.add_middleware(
 )
 
 # ============================================================
-#  TESSERACT OCR (pure python) – DZIAŁA NA RENDER FREE
+#  HEALTHCHECK
+# ============================================================
+
+@app.get("/health")
+def health():
+    return {"status": "OK", "engine": "tesseract-pro", "version": "1.0"}
+
+
+# ============================================================
+#  OCR PRO — TESSERACT (Render Free SAFE)
 # ============================================================
 
 def ocr_text(img: np.ndarray) -> str:
-    # Tesseract expects grayscale or RGB
-    if len(img.shape) == 2:
-        gray = img
-    else:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    """
+    PRO OCR:
+    - odszumianie
+    - adaptacyjny threshold
+    - fallback OCR
+    - czyszczenie artefaktów
+    """
 
-    # Slight denoise + threshold
-    blur = cv2.GaussianBlur(gray, (3, 3), 0)
-    thresh = cv2.threshold(blur, 150, 255, cv2.THRESH_BINARY)[1]
+    # 1) grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
+    # 2) odszumianie
+    denoise = cv2.fastNlMeansDenoising(gray, h=10)
+
+    # 3) threshold adaptacyjny (lepszy niż stały)
+    thresh = cv2.adaptiveThreshold(
+        denoise, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31, 5
+    )
+
+    # 4) OCR — pierwsza próba
     text = pytesseract.image_to_string(thresh, config="--psm 6")
-    return clean_text(text)
+    text = clean_text(text)
+
+    # 5) fallback — jeśli za mało znaków
+    if len(text) < 3:
+        fallback = pytesseract.image_to_string(denoise, config="--psm 6")
+        fallback = clean_text(fallback)
+        if len(fallback) > len(text):
+            text = fallback
+
+    return text
 
 
 # ============================================================
-#  POMOCNICZE: CZYSZCZENIE TEKSTU
+#  LOGI OCR
+# ============================================================
+
+def log_ocr(label: str, text: str, t_start: float):
+    duration = round((time.time() - t_start) * 1000, 1)
+    print(f"[OCR] {label}: {len(text)} chars, {duration} ms, text='{text[:40]}'")
+
+
+# ============================================================
+#  CLEAN TEXT
 # ============================================================
 
 def clean_text(t: str) -> str:
@@ -42,12 +83,13 @@ def clean_text(t: str) -> str:
     t = t.replace("|", " ")
     t = t.replace(":", " ")
     t = t.replace(";", " ")
+    t = re.sub(r"[^A-Z0-9ĄĆĘŁŃÓŚŹŻ .,-]", " ", t)
     t = re.sub(r"\s+", " ", t)
     return t.strip()
 
 
 # ============================================================
-#  CROP TICKER AREA (GÓRNY PASEK XTB)
+#  CROP TICKER AREA
 # ============================================================
 
 def crop_ticker_area(img: np.ndarray) -> np.ndarray:
@@ -56,7 +98,7 @@ def crop_ticker_area(img: np.ndarray) -> np.ndarray:
 
 
 # ============================================================
-#  PREPROCESS (GRAY + BLUR + THRESH)
+#  PREPROCESS (dla liczb)
 # ============================================================
 
 def preprocess(img: np.ndarray) -> np.ndarray:
@@ -67,7 +109,7 @@ def preprocess(img: np.ndarray) -> np.ndarray:
 
 
 # ============================================================
-#  INTERWAŁ (M1/M5/M15/H1/D1/...)
+#  INTERWAŁ
 # ============================================================
 
 def detect_interval(text: str) -> str:
@@ -79,7 +121,7 @@ def detect_interval(text: str) -> str:
 
 
 # ============================================================
-#  SŁOWNIK TICKERÓW
+#  TICKERY
 # ============================================================
 
 TICKER_MAP = {
@@ -209,11 +251,13 @@ def multi_find(text: str, labels):
 
 
 # ============================================================
-#  GŁÓWNY ENDPOINT OCR
+#  ENDPOINT OCR PRO
 # ============================================================
 
 @app.post("/ocr")
 async def ocr_endpoint(file: UploadFile = File(...)):
+    t0 = time.time()
+
     content = await file.read()
     img_array = np.frombuffer(content, np.uint8)
     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
@@ -221,13 +265,17 @@ async def ocr_endpoint(file: UploadFile = File(...)):
     if img is None:
         return {"error": "IMAGE_DECODE_FAILED"}
 
+    # OCR główny
     clean = preprocess(img)
     text = ocr_text(clean)
+    log_ocr("MAIN", text, t0)
 
+    # OCR ticker
     ticker_img = crop_ticker_area(img)
     ticker_text = ocr_text(preprocess(ticker_img))
-    ticker = detect_ticker(ticker_text)
+    log_ocr("TICKER", ticker_text, t0)
 
+    ticker = detect_ticker(ticker_text)
     if ticker == "UNKNOWN":
         ticker = detect_ticker(text)
 
@@ -260,4 +308,5 @@ async def ocr_endpoint(file: UploadFile = File(...)):
         "RSI": RSI,
         "VOL": VOL,
         "RVOL": RVOL,
+        "ocr_time_ms": round((time.time() - t0) * 1000, 1)
     }
