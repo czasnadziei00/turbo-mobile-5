@@ -1,11 +1,21 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-import requests
 import os
 import re
-import time
+import io
+import base64
+from typing import Optional
 
-app = FastAPI()
+import requests
+from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+HF_MODEL_URL = os.getenv(
+    "HF_MODEL_URL",
+    "https://api-inference.huggingface.co/models/your-ocr-model-id"
+)
+
+app = FastAPI(title="TURBO MOBILE AI Vision 2.0 (XTB)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,234 +24,133 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================================
-#  CONFIG — HUGGINGFACE DONUT
-# ============================================================
 
-HF_TOKEN = os.getenv("HF_TOKEN")
+class OcrResponse(BaseModel):
+    ticker: Optional[str] = None
+    interval: Optional[str] = None
+    O: Optional[float] = None
+    H: Optional[float] = None
+    L: Optional[float] = None
+    C: Optional[float] = None
+    MA20: Optional[float] = None
+    DEMA9: Optional[float] = None
+    RSI: Optional[float] = None
+    VOL: Optional[float] = None
 
-DONUT_MODEL = "naver-clova-ix/donut-base-finetuned-docvqa"
-HF_URL = f"https://api-inference.huggingface.co/models/{DONUT_MODEL}"
-
-HF_HEADERS = {
-    "Authorization": f"Bearer {HF_TOKEN}"
-}
-
-
-# ============================================================
-#  HEALTHCHECK — zostawiamy Twój branding
-# ============================================================
 
 @app.get("/health")
 def health():
-    return {
-        "status": "OK",
-        "engine": "tesseract-ultra-pro",
-        "version": "2.8",
-        "features": [
-            "AI Ticker Correct",
-            "AI Number Correct",
-            "AI Interval Correct",
-            "Market Detection"
-        ]
-    }
+    return {"status": "ok"}
 
 
-# ============================================================
-#  CLEAN TEXT
-# ============================================================
-
-def clean_text(t: str) -> str:
-    t = t.upper()
-    t = t.replace("|", " ")
-    t = t.replace(":", " ")
-    t = t.replace(";", " ")
-    t = re.sub(r"[^A-Z0-9ĄĆĘŁŃÓŚŹŻ .,%/\-]", " ", t)
-    t = re.sub(r"\s+", " ", t)
-    return t.strip()
-
-
-# ============================================================
-#  NUMBER EXTRACTION
-# ============================================================
-
-def extract_number_candidates(text: str):
-    raw = re.findall(r"[0-9][0-9., ]*[0-9]", text)
-    cleaned = []
-    for r in raw:
-        s = r.replace(" ", "")
-        if s.count(".") + s.count(",") > 1:
-            s = re.sub(r"[.,]", ".", s, count=1)
-            s = re.sub(r"[.,]", "", s)
-        s = s.replace(",", ".")
-        try:
-            cleaned.append(float(s))
-        except:
-            pass
-    return cleaned
-
-
-def find_labeled_number(text: str, labels):
-    for lbl in labels:
-        pattern = rf"{lbl}\s*[:=]?\s*([0-9., ]+)"
-        m = re.search(pattern, text)
-        if m:
-            candidates = extract_number_candidates(m.group(1))
-            if candidates:
-                return candidates[0]
-    return None
-
-
-# ============================================================
-#  INTERVAL DETECTION
-# ============================================================
-
-def normalize_interval(raw: str) -> str:
-    raw = raw.upper().replace(" ", "")
-    mapping = {
-        "1M": "M1", "M1": "M1", "M1S": "M1",
-        "5M": "M5", "M5": "M5",
-        "15M": "M15", "M15": "M15",
-        "30M": "M30", "M30": "M30",
-        "1H": "H1", "H1": "H1",
-        "4H": "H4", "H4": "H4",
-        "1D": "D1", "D1": "D1",
-        "1W": "W1", "W1": "W1",
-        "1MN": "MN", "MN": "MN"
-    }
-    return mapping.get(raw, "UNKNOWN")
-
-
-def detect_interval_ai(text: str) -> str:
-    tokens = re.findall(r"[MHWD][0-9]{1,2}|[0-9]{1,2}[MHWD]|MN|M1S", text.upper())
-    for tok in tokens:
-        norm = normalize_interval(tok)
-        if norm != "UNKNOWN":
-            return norm
-    return "UNKNOWN"
-
-
-# ============================================================
-#  MARKET DETECTION
-# ============================================================
-
-GPW_TICKERS = {
-    "KTY","ALE","CDR","PKN","PKO","PEO","PZU","DNP","JSW","MBK","LPP","CPS","OPL",
-    "TPE","KRU","SPL","ASB","BDX","CMR","DVL","DOM","ECH","ENA","ENG","FMF","ATT",
-    "BHW","CAR","LVC","MAB","MRC","NEU","PCO","STP","TEN","WPL","11B","EAT","APT",
-    "ASE","BML","BRS","CLN","CIE","COG","CMP","DBC","FRO","FTE","MRB","MBR","NWG",
-    "PCE","PWX","QRS","RBW","SNK","SNT","TIM","TOR","VOT","VRG","WLT","ZEP","XTB",
-    "KGH","COPPER"
-}
-
-CRYPTO_KEYWORDS = {"BTC","ETH","USDT","USDC","SOL","XRP","BNB","DOGE"}
-
-
-def detect_market(ticker: str, text: str) -> str:
-    t = text.upper()
-    if any(k in t for k in CRYPTO_KEYWORDS):
-        return "CRYPTO"
-    if ticker in GPW_TICKERS:
-        return "GPW"
-    if "NASDAQ" in t or "NYSE" in t or ".US" in t:
-        return "USA"
-    return "UNKNOWN"
-
-
-# ============================================================
-#  TICKER DETECTION
-# ============================================================
-
-def detect_ticker_ai(text: str) -> str:
-    words = re.findall(r"[A-ZĄĆĘŁŃÓŚŹŻ]{2,6}", text)
-    words = [w for w in words if not any(ch.isdigit() for ch in w)]
-    if not words:
-        return "UNKNOWN"
-    words.sort(key=len, reverse=True)
-    return words[0]
-
-
-# ============================================================
-#  HUGGINGFACE DONUT CALL
-# ============================================================
-
-def call_donut_api(image_bytes: bytes):
-    response = requests.post(
-        HF_URL,
-        headers=HF_HEADERS,
+def hf_ocr(image_bytes: bytes) -> str:
+    """
+    Lekki wrapper na HuggingFace OCR.
+    Zakładamy, że model zwraca plain text z całego screena XTB.
+    """
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    resp = requests.post(
+        HF_MODEL_URL,
+        headers=headers,
         data=image_bytes,
-        timeout=60
+        timeout=60,
     )
+    resp.raise_for_status()
+    data = resp.json()
+
+    # typowe formaty odpowiedzi HF: [{"generated_text": "..."}] albo {"text": "..."}
+    if isinstance(data, list) and data and "generated_text" in data[0]:
+        return data[0]["generated_text"]
+    if isinstance(data, dict) and "text" in data:
+        return data["text"]
+    # fallback – cokolwiek da się zrzutować na string
+    return str(data)
+
+
+def _to_float(x: Optional[str]) -> Optional[float]:
+    if not x:
+        return None
+    x = x.replace(" ", "").replace(",", ".")
     try:
-        return response.json()
-    except:
-        return {"error": "Invalid response from HuggingFace"}
+        return float(x)
+    except ValueError:
+        return None
 
 
-def extract_text_from_donut_result(result):
-    if isinstance(result, list) and len(result) > 0:
-        result = result[0]
-    if isinstance(result, dict):
-        if "generated_text" in result:
-            return str(result["generated_text"])
-        if "answer" in result:
-            return str(result["answer"])
-    return str(result)
+def parse_xtb_text(text: str) -> OcrResponse:
+    """
+    Parser dopasowany do layoutu XTB.
+    Szukamy:
+      O33.490 H33.540 L33.490 C33.530
+      MA 20 close 33.570
+      Podwójna Średnia Krocząca 9–20 Exponential 33.542 33.567
+      RSI 14 44.80
+      Wolumen 138
+      Dino Polska / Grupa Kęty / itp.
+      M5 / M15 / H1 / D1
+    """
+    t = text.replace("\n", " ")
+    t = re.sub(r"\s+", " ", t)
+
+    # O/H/L/C
+    o = re.search(r"O\s*([0-9]+[.,][0-9]+)", t)
+    h = re.search(r"H\s*([0-9]+[.,][0-9]+)", t)
+    l = re.search(r"L\s*([0-9]+[.,][0-9]+)", t)
+    c = re.search(r"C\s*([0-9]+[.,][0-9]+)", t)
+
+    # MA20
+    ma20 = re.search(r"MA\s*20.*?([0-9]+[.,][0-9]+)", t)
+
+    # DEMA9 – bierzemy pierwszą liczbę po "9–20" albo "9-20"
+    dema = re.search(r"9[–-]20.*?([0-9]+[.,][0-9]+)", t)
+
+    # RSI
+    rsi = re.search(r"RSI\s*14\s*([0-9]+[.,][0-9]+)", t)
+
+    # Wolumen
+    vol = re.search(r"Wolumen\s*([0-9]+)", t, re.IGNORECASE)
+
+    # Interval
+    interval = None
+    for iv in ["M5", "M15", "H1", "D1"]:
+        if re.search(rf"\b{iv}\b", t):
+            interval = iv
+            break
+
+    # Ticker – brutalnie, ale skutecznie: szukamy znanych słów i mapujemy
+    ticker = None
+    if re.search(r"\bDino\b", t, re.IGNORECASE):
+        ticker = "DINO"
+    elif re.search(r"Kęty|KETY|Grupa Kęty", t, re.IGNORECASE):
+        ticker = "KTY"
+    # tu możesz dodać kolejne mapowania GPW/USA
+
+    return OcrResponse(
+        ticker=ticker,
+        interval=interval,
+        O=_to_float(o.group(1) if o else None),
+        H=_to_float(h.group(1) if h else None),
+        L=_to_float(l.group(1) if l else None),
+        C=_to_float(c.group(1) if c else None),
+        MA20=_to_float(ma20.group(1) if ma20 else None),
+        DEMA9=_to_float(dema.group(1) if dema else None),
+        RSI=_to_float(rsi.group(1) if rsi else None),
+        VOL=_to_float(vol.group(1) if vol else None),
+    )
 
 
-# ============================================================
-#  MAIN OCR ENDPOINT — AI VISION + AI AUTO‑CORRECT
-# ============================================================
-
-@app.post("/ocr")
-async def ocr_endpoint(file: UploadFile = File(...)):
-    t0 = time.time()
-
-    image_bytes = await file.read()
-    if not image_bytes:
-        return {"error": "EMPTY_FILE"}
-
-    raw_result = call_donut_api(image_bytes)
-    if isinstance(raw_result, dict) and "error" in raw_result:
-        return {"error": raw_result["error"]}
-
-    raw_text = extract_text_from_donut_result(raw_result)
-    clean = clean_text(raw_text)
-
-    ticker = detect_ticker_ai(clean)
-    interval = detect_interval_ai(clean)
-
-    O = find_labeled_number(clean, ["O", "OPEN"])
-    H = find_labeled_number(clean, ["H", "HIGH"])
-    L = find_labeled_number(clean, ["L", "LOW"])
-    C = find_labeled_number(clean, ["C", "CLOSE"])
-
-    MA20 = find_labeled_number(clean, ["MA20", "MA 20", "SMA20"])
-    EMA9 = find_labeled_number(clean, ["EMA9", "EMA 9"])
-    SMA50 = find_labeled_number(clean, ["SMA50", "SMA 50"])
-    DEMA9 = find_labeled_number(clean, ["DEMA9", "DEMA 9"])
-    RSI = find_labeled_number(clean, ["RSI"])
-    VOL = find_labeled_number(clean, ["VOLUME", "VOL", "WOLUMEN"])
-    RVOL = find_labeled_number(clean, ["RVOL", "R-VOL"])
-
-    market = detect_market(ticker, clean)
-
-    return {
-        "ticker": ticker,
-        "interval": interval,
-        "market": market,
-        "O": O,
-        "H": H,
-        "L": L,
-        "C": C,
-        "MA20": MA20,
-        "EMA9": EMA9,
-        "DEMA9": DEMA9,
-        "SMA50": SMA50,
-        "RSI": RSI,
-        "VOL": VOL,
-        "RVOL": RVOL,
-        "raw_text": raw_text,
-        "clean_text": clean,
-        "ocr_time_ms": round((time.time() - t0) * 1000, 1)
-    }
+@app.post("/ocr", response_model=OcrResponse)
+async def ocr_xtb(file: UploadFile = File(...)):
+    """
+    AI Vision 2.0 — XTB‑only.
+    Przyjmuje screena z XTB, wysyła do HF OCR, parsuje layout XTB
+    i zwraca JSON zgodny z Twoim TURBO MOBILE.
+    """
+    try:
+        content = await file.read()
+        text = hf_ocr(content)
+        parsed = parse_xtb_text(text)
+        return parsed
+    except Exception as e:
+        # frontend i tak ma fallback na aktywny wiersz
+        return OcrResponse()
