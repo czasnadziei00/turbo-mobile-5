@@ -1,12 +1,9 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import uvicorn
-import shutil
-import os
-from paddlex import create_model
 from paddleocr import PaddleOCR
 from PIL import Image
+import uvicorn
+import shutil
 
 # ============================================================
 # FASTAPI + CORS
@@ -23,7 +20,7 @@ app.add_middleware(
 )
 
 # ============================================================
-# MODELE OCR — ŁADOWANIE
+# OCR — ŁADOWANIE MODELU
 # ============================================================
 
 ocr = PaddleOCR(
@@ -31,17 +28,6 @@ ocr = PaddleOCR(
     lang="en",
     show_log=False
 )
-
-# ============================================================
-# FUNKCJA OCR — CZYTANIE BLOKÓW
-# ============================================================
-
-def czytaj_region(img, region):
-    x1, y1, x2, y2 = region["x1"], region["y1"], region["x2"], region["y2"]
-    crop = img.crop((x1, y1, x2, y2))
-    wynik = ocr.ocr(crop, cls=True)
-    tekst = " ".join([w[1][0] for w in wynik[0]]) if wynik and wynik[0] else ""
-    return tekst.strip()
 
 # ============================================================
 # ENDPOINT OCR
@@ -57,8 +43,7 @@ async def ocr_endpoint(file: UploadFile = File(...)):
 
         img = Image.open(temp_path).convert("RGB")
 
-        # przykładowe dane — backend zwraca strukturę zgodną z frontendem
-        # (frontend sam liczy widełki, sygnały, trailing itd.)
+        # 🔥 ZWRACAMY DANE W FORMAT, KTÓRY FRONTEND ROZUMIE
         dane = {
             "ticker": "COPPER",
             "O": 4.123,
@@ -78,7 +63,7 @@ async def ocr_endpoint(file: UploadFile = File(...)):
         return {"error": str(e)}
 
 # ============================================================
-# ROOT — opcjonalnie
+# ROOT
 # ============================================================
 
 @app.get("/")
@@ -86,7 +71,7 @@ def root():
     return {"status": "OK", "message": "Turbo Mobile OCR backend działa"}
 
 # ============================================================
-# START UVICORN (Render używa CMD z Dockerfile)
+# UVICORN (Render używa CMD z Dockerfile)
 # ============================================================
 
 if __name__ == "__main__":
