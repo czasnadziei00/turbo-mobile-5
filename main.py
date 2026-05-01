@@ -22,7 +22,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 class OcrResponse(BaseModel):
   ticker: Optional[str] = None
   interval: Optional[str] = None
@@ -35,19 +34,11 @@ class OcrResponse(BaseModel):
   RSI: Optional[float] = None
   VOL: Optional[float] = None
 
-
 @app.get("/health")
 def health():
   return {"status": "ok"}
 
-
 def hf_ocr(image_bytes: bytes) -> str:
-  """
-  Prosty wrapper na HF OCR:
-  - timeout
-  - obsługa różnych formatów odpowiedzi
-  - czytelne logowanie
-  """
   headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
   try:
     resp = requests.post(
@@ -67,7 +58,6 @@ def hf_ocr(image_bytes: bytes) -> str:
   print("=== RAW HF RESPONSE ===")
   print(data)
 
-  # typowe formaty z HF
   if isinstance(data, list) and data and isinstance(data[0], dict):
     if "generated_text" in data[0]:
       return data[0]["generated_text"]
@@ -78,9 +68,7 @@ def hf_ocr(image_bytes: bytes) -> str:
     if "generated_text" in data:
       return data["generated_text"]
 
-  # fallback – cokolwiek, byle string
   return str(data)
-
 
 def _to_float(x: Optional[str]) -> Optional[float]:
   if not x:
@@ -91,55 +79,30 @@ def _to_float(x: Optional[str]) -> Optional[float]:
   except ValueError:
     return None
 
-
 def parse_xtb_text(text: str) -> OcrResponse:
-  """
-  Parser dopasowany do layoutu XTB.
-  Szukamy:
-    O33.490 H33.540 L33.490 C33.530
-    MA 20 close 33.570
-    Podwójna Średnia Krocząca 9–20 Exponential 33.542 33.567
-    RSI 14 44.80
-    Wolumen 138
-    Dino Polska / Grupa Kęty / itp.
-    M5 / M15 / H1 / D1
-  """
   t = text.replace("\n", " ")
   t = re.sub(r"\s+", " ", t)
 
-  # O/H/L/C
   o = re.search(r"\bO\s*([0-9]+[.,][0-9]+)", t)
   h = re.search(r"\bH\s*([0-9]+[.,][0-9]+)", t)
   l = re.search(r"\bL\s*([0-9]+[.,][0-9]+)", t)
   c = re.search(r"\bC\s*([0-9]+[.,][0-9]+)", t)
 
-  # MA20
   ma20 = re.search(r"\bMA\s*20\b.*?([0-9]+[.,][0-9]+)", t)
-
-  # DEMA9 – pierwsza liczba po "9–20" albo "9-20"
   dema = re.search(r"9[–-]20.*?([0-9]+[.,][0-9]+)", t)
-
-  # RSI
   rsi = re.search(r"\bRSI\s*14\s*([0-9]+[.,][0-9]+)", t)
-
-  # Wolumen
   vol = re.search(r"\bWolumen\s*([0-9]+)", t, re.IGNORECASE)
 
-  # Interval
   interval = None
   for iv in ["M5", "M15", "H1", "D1"]:
     if re.search(rf"\b{iv}\b", t):
       interval = iv
       break
 
-  # Ticker – mapowanie w jednym miejscu
   ticker = None
   ticker_map = {
     r"\bDino\b": "DINO",
     r"Kęty|KETY|Grupa Kęty": "KTY",
-    # tu dopisujesz kolejne:
-    # r"Orlen|PKN Orlen": "PKN",
-    # r"Allegro": "ALE",
   }
   for pattern, code in ticker_map.items():
     if re.search(pattern, t, re.IGNORECASE):
@@ -159,14 +122,8 @@ def parse_xtb_text(text: str) -> OcrResponse:
     VOL=_to_float(vol.group(1) if vol else None),
   )
 
-
 @app.post("/ocr", response_model=OcrResponse)
 async def ocr_xtb(file: UploadFile = File(...)):
-  """
-  AI Vision 2.0 — XTB‑only.
-  Przyjmuje screena z XTB, wysyła do HF OCR, parsuje layout XTB
-  i zwraca JSON zgodny z TURBO MOBILE 5 PRO.
-  """
   try:
     content = await file.read()
     text = hf_ocr(content)
@@ -175,5 +132,4 @@ async def ocr_xtb(file: UploadFile = File(...)):
   except Exception as e:
     print("=== OCR_XTB ERROR ===")
     print(repr(e))
-    # frontend ma fallback na aktywny wiersz
     return OcrResponse()
