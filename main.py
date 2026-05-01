@@ -4,10 +4,38 @@ from typing import Optional
 from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 from PIL import Image
+import numpy as np
+from paddleocr import PaddleOCR
 
-# ---------------------------------------------------------
+# ============================================================
+#  OCR (PaddleOCR) — działa na Python 3.12
+# ============================================================
+
+ocr = PaddleOCR(
+    lang='en',
+    use_angle_cls=True
+)
+
+
+def ocr_image(img: Image.Image) -> str:
+    np_img = np.array(img)
+    result = ocr.ocr(np_img, cls=True)
+    out = []
+    if result:
+        for line in result:
+            for box, text in line:
+                out.append(text[0])
+    return " ".join(out)
+
+
+def ocr_region(full: Image.Image, box):
+    crop = full.crop(box)
+    return ocr_image(crop)
+
+
+# ============================================================
 #  MODEL ODPOWIEDZI
-# ---------------------------------------------------------
+# ============================================================
 
 class OcrResponse(BaseModel):
     ticker: Optional[str]
@@ -22,22 +50,22 @@ class OcrResponse(BaseModel):
     VOL: Optional[float]
 
 
-# ---------------------------------------------------------
-#  REGIONY (PORTRAIT) — BLOK5 DODANY
-# ---------------------------------------------------------
+# ============================================================
+#  REGIONY (PORTRAIT)
+# ============================================================
 
-BLOK1 = (72, 291, 72+936, 291+258)
-BLOK2 = (1044, 291, 1044+936, 291+258)
-BLOK3 = (72, 579, 72+1908, 579+258)
-BLOK4 = (72, 867, 72+1908, 867+258)
+BLOK1 = (3, 291, 3+770, 291+286)
+BLOK2 = (695, 116, 695+101, 116+76)
+BLOK3 = (8, 1267, 8+297, 1267+76)
+BLOK4 = (2, 1778, 2+776, 1778+60)
 
-# BLOK5 — TICKER (Twoje pomiary)
+# BLOK5 — TICKER
 BLOK5 = (237, 71, 237+1061, 71+88)
 
 
-# ---------------------------------------------------------
+# ============================================================
 #  FUNKCJE POMOCNICZE
-# ---------------------------------------------------------
+# ============================================================
 
 def _to_float(x: Optional[str]) -> Optional[float]:
     if not x:
@@ -49,61 +77,38 @@ def _to_float(x: Optional[str]) -> Optional[float]:
         return None
 
 
-# ---------------------------------------------------------
-#  OCR — PODSTAW SWÓJ MODEL (HF / Paddle / EasyOCR)
-# ---------------------------------------------------------
-
-def ocr_image(img: Image.Image) -> str:
-    # TU PODSTAWIASZ SWÓJ MODEL OCR
-    # return hf_ocr(img_bytes)
-    return ""   # placeholder — Twój OCR tu wchodzi
-
-
-def ocr_region(full: Image.Image, box):
-    crop = full.crop(box)
-    return ocr_image(crop)
-
-
-# ---------------------------------------------------------
-#  PARSER XTB — STABILNY, ODPORNY NA OCR
-# ---------------------------------------------------------
+# ============================================================
+#  PARSER XTB
+# ============================================================
 
 def parse_xtb_text(text: str) -> OcrResponse:
     t = text.replace("\n", " ")
     t = re.sub(r"\s+", " ", t)
 
-    # O / H / L / C
     o = re.search(r"\bO\s*([0-9][0-9\s.,]+)", t)
     h = re.search(r"\bH\s*([0-9][0-9\s.,]+)", t)
     l = re.search(r"\bL\s*([0-9][0-9\s.,]+)", t)
     c = re.search(r"\bC\s*([0-9][0-9\s.,]+)", t)
 
-    # MA20 / DEMA9
     ma20 = re.search(r"MA\s*20.*?([0-9][0-9\s.,]+)", t, re.IGNORECASE)
     dema = re.search(r"DEMA\s*9.*?([0-9][0-9\s.,]+)", t, re.IGNORECASE)
-
-    # RSI
     rsi = re.search(r"RSI\s*14\s*([0-9][0-9\s.,]+)", t, re.IGNORECASE)
-
-    # Wolumen
     vol = re.search(r"Wolumen\s*([0-9][0-9\s.,]*)", t, re.IGNORECASE)
 
-    # Interwał
     interval = None
     for iv in ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]:
         if re.search(rf"\b{iv}\b", t):
             interval = iv
             break
 
-    # Ticker — odporne na OCR
     ticker = None
     ticker_map = {
-        r"\bDINO\b|DINOPL": "DINO",
+        r"DINO|DINOPL": "DINO",
         r"KĘTY|KETY|GRUPA\s*KĘTY|GRUPA\s*KETY|KETY\.PL|GRUPA\s*K\b": "KETY",
-        r"\bKGHM\b": "KGHM",
-        r"\bCOPPER\b|MIEDŹ": "COPPER",
-        r"\bGOLD\b|ZŁOTO": "GOLD",
-        r"\bUS500\b|SP500": "US500",
+        r"KGHM": "KGHM",
+        r"COPPER|MIEDŹ": "COPPER",
+        r"GOLD|ZŁOTO": "GOLD",
+        r"US500|SP500": "US500",
     }
 
     for pattern, code in ticker_map.items():
@@ -125,18 +130,19 @@ def parse_xtb_text(text: str) -> OcrResponse:
     )
 
 
-# ---------------------------------------------------------
+# ============================================================
 #  ENDPOINT OCR
-# ---------------------------------------------------------
+# ============================================================
 
 app = FastAPI()
 
 @app.post("/ocr")
 async def ocr(file: UploadFile = File(...)) -> OcrResponse:
     content = await file.read()
+    print("=== ODEBRANO PLIK ===", file.filename)
+
     img = Image.open(io.BytesIO(content)).convert("RGB")
 
-    # BLOK1–4: dane liczbowe
     text_main = [
         ocr_region(img, BLOK1),
         ocr_region(img, BLOK2),
@@ -144,13 +150,11 @@ async def ocr(file: UploadFile = File(...)) -> OcrResponse:
         ocr_region(img, BLOK4),
     ]
 
-    # BLOK5: ticker
     text_ticker = ocr_region(img, BLOK5)
 
+    print("=== BLOK5 RAW ===")
+    print(text_ticker)
+
     full_text = " ".join(text_main + [text_ticker])
-
-    print("=== OCR TEXT ===")
-    print(full_text)
-
     parsed = parse_xtb_text(full_text)
     return parsed
