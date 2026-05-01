@@ -447,6 +447,39 @@ function sortujPoSygnale() {
 
   rows.forEach(r => tbody.appendChild(r));
 }
+function resetTable1() {
+  const tbody = document.getElementById("tbody");
+
+  [...tbody.rows].forEach(r => {
+    if (!r.dataset.ticker) return;
+
+    // czyści price
+    r.cells[2].querySelector("input").value = "";
+
+    // NIE czyści entry
+    // r.cells[3].querySelector("input").value = r.cells[3].querySelector("input").value;
+
+    // czyści widełki i sygnały
+    r.cells[4].innerText = "CZEKAJ";
+    r.cells[5].innerText = "—";
+    r.cells[6].innerText = "—";
+    r.cells[7].innerText = "—";
+    r.cells[8].innerText = "—";
+
+    // czyści dataset
+    delete r.dataset.O;
+    delete r.dataset.H;
+    delete r.dataset.L;
+    delete r.dataset.C;
+    delete r.dataset.MA20;
+    delete r.dataset.DEMA9;
+    delete r.dataset.RSI;
+    delete r.dataset.VOL;
+    delete r.dataset.interval;
+  });
+
+  zapiszTabele();
+}
 
 /* ============================================================
    START
