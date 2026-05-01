@@ -13,20 +13,19 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # pozwalamy na połączenia z localhost i Render
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ============================================================
-# OCR — ŁADOWANIE MODELU
+# OCR — ŁADOWANIE MODELU (bez show_log!)
 # ============================================================
 
 ocr = PaddleOCR(
     use_angle_cls=True,
-    lang="en",
-    show_log=False
+    lang="en"
 )
 
 # ============================================================
@@ -36,14 +35,13 @@ ocr = PaddleOCR(
 @app.post("/ocr")
 async def ocr_endpoint(file: UploadFile = File(...)):
     try:
-        # zapis pliku tymczasowego
         temp_path = "temp.jpg"
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
         img = Image.open(temp_path).convert("RGB")
 
-        # 🔥 ZWRACAMY DANE W FORMAT, KTÓRY FRONTEND ROZUMIE
+        # przykładowe dane — frontend sam liczy sygnały
         dane = {
             "ticker": "COPPER",
             "O": 4.123,
@@ -71,7 +69,7 @@ def root():
     return {"status": "OK", "message": "Turbo Mobile OCR backend działa"}
 
 # ============================================================
-# UVICORN (Render używa CMD z Dockerfile)
+# UVICORN
 # ============================================================
 
 if __name__ == "__main__":
