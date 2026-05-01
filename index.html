@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>TURBO MOBILE 5 — XTB + AI Vision</title>
+
   <style>
     body { font-family: Arial, sans-serif; background:#111; color:#eee; }
     table { width:100%; border-collapse:collapse; margin-top:10px; }
@@ -17,17 +18,17 @@
     .trail-active { outline:2px solid #00FFFF; }
     .price-input, .entry-input { width:100%; box-sizing:border-box; }
     button { cursor:pointer; }
+    .reset-btn { background:#b00; color:#fff; padding:6px 10px; }
   </style>
 </head>
 <body>
 
 <h2>TURBO MOBILE 5 — XTB + AI Vision</h2>
 
-<button onclick="resetTable1()" style="background:#b00;color:#fff;padding:6px 10px;">
+<button onclick="resetTable1()" class="reset-btn">
   RESET (czyści wszystko oprócz ENTRY)
 </button>
 
-<!-- UKRYTY INPUT DLA OCR (📎) -->
 <input type="file" id="ocr-file-input" accept="image/*" style="display:none"
        onchange="wczytajOCRZPlikow(event)">
 
@@ -48,17 +49,18 @@
       <th>Akcje</th>
     </tr>
   </thead>
-  <tbody id="tbody">
-    <!-- wiersze dynamiczne -->
-  </tbody>
+  <tbody id="tbody"></tbody>
 </table>
 
 <script>
-const OCR_URL = "https://twoj-backend-ocr-url"; // <- tu swój URL
 /* ============================================================
-   REGIONY OCR — 4 bloki: OLHC, INTERWAŁ, RSI, GODZINA
+   BACKEND OCR
    ============================================================ */
+const OCR_URL = "https://turbo-mobile83.onrender.com/ocr";
 
+/* ============================================================
+   REGIONY OCR
+   ============================================================ */
 function R(x1, y1, w, h) {
   return { x1, y1, x2: x1 + w, y2: y1 + h };
 }
@@ -77,11 +79,9 @@ const REGIONY = {
     BLOK4: R(228, 776, 1124, 50),
   }
 };
-
 /* ============================================================
-   OCR — backend region-based
+   OCR
    ============================================================ */
-
 async function wczytajOCRZPlikow(event) {
   const pliki = event.target.files;
   if (!pliki || pliki.length === 0) return;
@@ -107,9 +107,40 @@ async function startOCR(file) {
 }
 
 /* ============================================================
-   TWORZENIE / AKTUALIZACJA WIERSZA — 4.5 PRO
+   KORELACJA KGHM ↔ COPPER
    ============================================================ */
+let lastCopper = null;
+let lastKGHM = null;
 
+function zapiszDaneDoKorelacji(d) {
+  if (d.ticker === "COPPER") lastCopper = d;
+  if (d.ticker === "KGHM")   lastKGHM   = d;
+}
+
+function zastosujKorelacjeKGHM(w) {
+  if (!lastCopper || w.dataset.ticker !== "KGHM") return;
+
+  const cH = lastCopper.H;
+  const cL = lastCopper.L;
+  const cC = lastCopper.C;
+  const cMA = lastCopper.MA20;
+
+  let s = w.cells[4].innerText;
+
+  if (cC < cL) s = "RESET";
+
+  const buyZone = cC > cL + (cH - cL) * 0.20 && cC < cL + (cH - cL) * 0.35;
+  if (buyZone && s === "PRAWIE BUY") s = "BUY";
+
+  if (cMA && cC > cMA && s === "CZEKAJ") s = "PRAWIE BUY";
+
+  w.cells[4].innerText = s;
+  kolorujSygnal(w, s);
+}
+
+/* ============================================================
+   TWORZENIE / AKTUALIZACJA WIERSZA
+   ============================================================ */
 let aktywnyWiersz = null;
 
 function dodajLubAktualizujWiersz(d) {
@@ -157,161 +188,9 @@ function dodajLubAktualizujWiersz(d) {
   zastosujKorelacjeKGHM(w);
   sortujPoSygnale();
 }
-
-/* ============================================================
-   USUWANIE WIERSZA
-   ============================================================ */
-
-function usunWiersz(btn) {
-  btn.closest("tr").remove();
-  zapiszTabele();
-}
-
-/* ============================================================
-   AKTYWNY WIERSZ
-   ============================================================ */
-
-document.addEventListener("click", e => {
-  const tr = e.target.closest("tr");
-  if (tr && tr.dataset.ticker) aktywnyWiersz = tr;
-});
-
-/* ============================================================
-   MIKROFON 2.0
-   ============================================================ */
-
-function uruchomMikrofon(wiersz) {
-  aktywnyWiersz = wiersz;
-
-  const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-  rec.lang = "pl-PL";
-  rec.start();
-
-  rec.onresult = e => obsluzTekstZMikrofonu(e.results[0][0].transcript.trim());
-}
-
-function obsluzTekstZMikrofonu(t) {
-  const parts = t.toUpperCase().split(" ");
-  const liczba = parts.find(p => p.replace(",", ".").match(/^[0-9.]+$/));
-  const cena = liczba ? parseFloat(liczba.replace(",", ".")) : null;
-  const ticker = parts.find(p => isNaN(p) && p.length >= 3) || null;
-
-  if (ticker && cena) return ustawTickerICene(ticker, cena);
-  if (!ticker && cena) return ustawTylkoCene(cena);
-
-  alert("Powiedz np. 'Dino 33.6' albo '33.6'");
-}
-
-function ustawTickerICene(ticker, cena) {
-  const tbody = document.getElementById("tbody");
-  let w = [...tbody.rows].find(r => r.dataset.ticker === ticker);
-
-  if (!w) {
-    w = tbody.insertRow(-1);
-    w.dataset.ticker = ticker;
-
-    w.insertCell(0).innerText = "📊";
-    w.insertCell(1).innerText = ticker;
-    w.insertCell(2).innerHTML = `<input class="price-input">`;
-    w.insertCell(3).innerHTML = `<input class="entry-input">`;
-    w.insertCell(4).innerText = "CZEKAJ";
-    w.insertCell(5).innerText = "—";
-    w.insertCell(6).innerText = "—";
-    w.insertCell(7).innerText = "—";
-    w.insertCell(8).innerText = "—";
-    w.insertCell(9).innerHTML = `<button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button>`;
-    w.insertCell(10).innerHTML = `<button onclick="document.getElementById('ocr-file-input').click()">📎</button>`;
-    w.insertCell(11).innerHTML = `<button onclick="usunWiersz(this);zapiszTabele()">🗑 Usuń</button>`;
-  }
-
-  aktywnyWiersz = w;
-  w.cells[2].querySelector("input").value = cena.toFixed(3);
-
-  aktualizujSygnał(w);
-  sortujPoSygnale();
-  zapiszTabele();
-}
-
-function ustawTylkoCene(cena) {
-  if (!aktywnyWiersz) return alert("Najpierw kliknij wiersz");
-
-  aktywnyWiersz.cells[2].querySelector("input").value = cena.toFixed(3);
-  aktualizujSygnał(aktywnyWiersz);
-  sortujPoSygnale();
-  zapiszTabele();
-}
-
-/* ============================================================
-   KOLORY SYGNAŁÓW
-   ============================================================ */
-
-function kolorujSygnal(w, s) {
-  const c = w.cells[4];
-  c.className = "";
-  c.classList.add(
-    s === "BUY" ? "signal-buy" :
-    s === "PRAWIE BUY" ? "signal-prawiebuy" :
-    s === "CZEKAJ" ? "signal-czekaj" :
-    s === "CZEKAJ DO" ? "signal-czekajdo" :
-    s === "UWAGA RESET" ? "signal-uwagarese" :
-    s === "RESET" ? "signal-reset" : ""
-  );
-}
-
-/* ============================================================
-   TRAILING TP3
-   ============================================================ */
-
-function aktualizujTrailing(w) {
-  const cena  = parseFloat(w.cells[2].querySelector("input").value);
-  const entry = parseFloat(w.cells[3].querySelector("input").value);
-  if (isNaN(cena) || isNaN(entry) || entry <= 0) return;
-
-  const tp3 = entry * 1.03;
-  const tsl = entry * 1.015;
-
-  w.dataset.TP3 = tp3.toFixed(3);
-  w.dataset.TRAILING_SL = tsl.toFixed(3);
-
-  w.classList.toggle("trail-active", cena > tp3);
-}
-
-/* ============================================================
-   KORELACJA KGHM ↔ COPPER PRO
-   ============================================================ */
-
-let lastCopper = null;
-let lastKGHM   = null;
-
-function zapiszDaneDoKorelacji(d) {
-  if (d.ticker === "COPPER") lastCopper = d;
-  if (d.ticker === "KGHM")   lastKGHM   = d;
-}
-
-function zastosujKorelacjeKGHM(w) {
-  if (!lastCopper || w.dataset.ticker !== "KGHM") return;
-
-  const cH = lastCopper.H;
-  const cL = lastCopper.L;
-  const cC = lastCopper.C;
-  const cMA = lastCopper.MA20;
-
-  let s = w.cells[4].innerText;
-
-  if (cC < cL) s = "RESET";
-
-  const buyZone = cC > cL + (cH - cL) * 0.20 && cC < cL + (cH - cL) * 0.35;
-  if (buyZone && s === "PRAWIE BUY") s = "BUY";
-
-  if (cMA && cC > cMA && s === "CZEKAJ") s = "PRAWIE BUY";
-
-  w.cells[4].innerText = s;
-  kolorujSygnal(w, s);
-}
 /* ============================================================
    SYGNAŁ 4.5 PRO
    ============================================================ */
-
 function aktualizujSygnał(w) {
   const cena = parseFloat(w.cells[2].querySelector("input").value);
   const cell = w.cells[4];
@@ -361,9 +240,41 @@ function aktualizujSygnał(w) {
 }
 
 /* ============================================================
-   LOCALSTORAGE PRO
+   KOLORY SYGNAŁÓW
    ============================================================ */
+function kolorujSygnal(w, s) {
+  const c = w.cells[4];
+  c.className = "";
+  c.classList.add(
+    s === "BUY" ? "signal-buy" :
+    s === "PRAWIE BUY" ? "signal-prawiebuy" :
+    s === "CZEKAJ" ? "signal-czekaj" :
+    s === "CZEKAJ DO" ? "signal-czekajdo" :
+    s === "UWAGA RESET" ? "signal-uwagarese" :
+    s === "RESET" ? "signal-reset" : ""
+  );
+}
 
+/* ============================================================
+   TRAILING
+   ============================================================ */
+function aktualizujTrailing(w) {
+  const cena  = parseFloat(w.cells[2].querySelector("input").value);
+  const entry = parseFloat(w.cells[3].querySelector("input").value);
+  if (isNaN(cena) || isNaN(entry) || entry <= 0) return;
+
+  const tp3 = entry * 1.03;
+  const tsl = entry * 1.015;
+
+  w.dataset.TP3 = tp3.toFixed(3);
+  w.dataset.TRAILING_SL = tsl.toFixed(3);
+
+  w.classList.toggle("trail-active", cena > tp3);
+}
+
+/* ============================================================
+   LOCALSTORAGE
+   ============================================================ */
 function zapiszTabele() {
   const tbody = document.getElementById("tbody");
   const data = [...tbody.rows]
@@ -405,9 +316,108 @@ function wczytajTabele() {
 }
 
 /* ============================================================
-   SORTOWANIE PO SYGNALE
+   RESET
    ============================================================ */
+function resetTable1() {
+  const tbody = document.getElementById("tbody");
 
+  [...tbody.rows].forEach(r => {
+    if (!r.dataset.ticker) return;
+
+    r.cells[2].querySelector("input").value = "";
+
+    r.cells[4].innerText = "CZEKAJ";
+    r.cells[5].innerText = "—";
+    r.cells[6].innerText = "—";
+    r.cells[7].innerText = "—";
+    r.cells[8].innerText = "—";
+
+    delete r.dataset.O;
+    delete r.dataset.H;
+    delete r.dataset.L;
+    delete r.dataset.C;
+    delete r.dataset.MA20;
+    delete r.dataset.DEMA9;
+    delete r.dataset.RSI;
+    delete r.dataset.VOL;
+    delete r.dataset.interval;
+
+    r.classList.remove("trail-active");
+  });
+
+  zapiszTabele();
+}
+/* ============================================================
+   KOMENTARZ 4.5 PRO
+   ============================================================ */
+function komentarz45PRO(w) {
+  const t = w.dataset.ticker || "";
+
+  const O = parseFloat(w.dataset.O || 0);
+  const H = parseFloat(w.dataset.H || 0);
+  const L = parseFloat(w.dataset.L || 0);
+  const C = parseFloat(w.dataset.C || 0);
+
+  const MA20  = parseFloat(w.dataset.MA20  || 0);
+  const EMA20 = parseFloat(w.dataset.EMA20 || 0);
+  const DEMA9 = parseFloat(w.dataset.DEMA9 || 0);
+  const RSI   = parseFloat(w.dataset.RSI   || 0);
+  const VOL   = parseFloat(w.dataset.VOL   || 0);
+
+  const widełki = w.cells[5].innerText || "—";
+  const sygnał  = w.cells[4].innerText || "—";
+
+  let txt = `⭐ ANALIZA 4.5 PRO — ${t}\n\n`;
+
+  txt += `1. STRUKTURA M15\nO=${O}\nH=${H}\nL=${L}\nC=${C}\n\n`;
+  txt += `2. MOMENTUM\nDEMA9=${DEMA9} → ${C > DEMA9 ? "impuls NAD" : "impuls POD"}\n\n`;
+  txt += `3. TREND\nMA20=${MA20} → ${C > MA20 ? "UP" : "DOWN"}\nEMA20=${EMA20} → ${C > EMA20 ? "UP" : "DOWN"}\n\n`;
+  txt += `4. RSI\nRSI=${RSI}\n\n`;
+  txt += `5. VOLUME\nVOL=${VOL}\n\n`;
+  txt += `6. WIDEŁKI\n${widełki}\n\n`;
+  txt += `7. SYGNAŁ\n${sygnał}\n\n`;
+
+  txt += `⭐ INTERPRETACJA\n`;
+  if (sygnał === "RESET") txt += `🟥 Pełny RESET — brak impulsu i rytmu.\n`;
+  else if (sygnał === "PRAWIE BUY") txt += `🟧 PRAWIE BUY — struktura OK, impuls słaby.\n`;
+  else if (sygnał === "BUY") txt += `🟩 BUY — impuls + rytm + fundament.\n`;
+  else txt += `CZEKAJ — brak warunków do wejścia.\n`;
+
+  if (t === "KGHM" && lastCopper) {
+    const cH = lastCopper.H;
+    const cL = lastCopper.L;
+    const cC = lastCopper.C;
+    const cMA = lastCopper.MA20;
+    const cD9 = lastCopper.DEMA9;
+    const cRSI = lastCopper.RSI;
+
+    txt += `\n⭐ KORELACJA Z COPPER\n`;
+    txt += `Copper C=${cC}\nMA20=${cMA}, DEMA9=${cD9}, RSI=${cRSI}\n\n`;
+
+    if (cC < cL) txt += `🟥 Copper = RESET → ciągnie KGHM w dół\n`;
+    else if (cC > cL + (cH - cL) * 0.20 && cC < cL + (cH - cL) * 0.35)
+      txt += `🟩 Copper = BUY zone → wspiera KGHM\n`;
+    else txt += `🟧 Copper = neutralny\n`;
+  }
+
+  pokazPopupKomentarza(txt);
+}
+
+/* ============================================================
+   POPUP KOMENTARZA
+   ============================================================ */
+function pokazPopupKomentarza(txt) {
+  document.getElementById("popup-text").innerText = txt;
+  document.getElementById("popup-komentarz").style.display = "block";
+}
+
+function zamknijPopupKomentarza() {
+  document.getElementById("popup-komentarz").style.display = "none";
+}
+
+/* ============================================================
+   SORTOWANIE
+   ============================================================ */
 function sortujPoSygnale() {
   const tbody = document.getElementById("tbody");
   const rows = [...tbody.rows];
@@ -431,50 +441,41 @@ function sortujPoSygnale() {
 }
 
 /* ============================================================
-   RESET — czyści wszystko oprócz ENTRY
+   POPUP HTML
    ============================================================ */
-
-function resetTable1() {
-  const tbody = document.getElementById("tbody");
-
-  [...tbody.rows].forEach(r => {
-    if (!r.dataset.ticker) return;
-
-    // czyści CENA
-    r.cells[2].querySelector("input").value = "";
-
-    // ENTRY zostaje
-
-    // czyści sygnał + widełki + TP
-    r.cells[4].innerText = "CZEKAJ";
-    r.cells[5].innerText = "—";
-    r.cells[6].innerText = "—";
-    r.cells[7].innerText = "—";
-    r.cells[8].innerText = "—";
-
-    // czyści dataset (OLHC, MA, RSI, VOL, interval)
-    delete r.dataset.O;
-    delete r.dataset.H;
-    delete r.dataset.L;
-    delete r.dataset.C;
-    delete r.dataset.MA20;
-    delete r.dataset.DEMA9;
-    delete r.dataset.RSI;
-    delete r.dataset.VOL;
-    delete r.dataset.interval;
-
-    r.classList.remove("trail-active");
-  });
-
-  zapiszTabele();
-}
-
-/* ============================================================
-   START
-   ============================================================ */
-
-wczytajTabele();
-
 </script>
+
+<div id="popup-komentarz" style="
+  display:none;
+  position:fixed;
+  top:0; left:0;
+  width:100%; height:100%;
+  background:rgba(0,0,0,0.7);
+  backdrop-filter:blur(4px);
+  z-index:9999;
+">
+  <div style="
+    background:#222;
+    color:#eee;
+    padding:20px;
+    width:90%;
+    max-width:600px;
+    margin:60px auto;
+    border:1px solid #555;
+    white-space:pre-wrap;
+    font-family:monospace;
+  " id="popup-text"></div>
+
+  <button onclick="zamknijPopupKomentarza()" style="
+    display:block;
+    margin:20px auto;
+    padding:10px 20px;
+    background:#b00;
+    color:#fff;
+    border:none;
+    cursor:pointer;
+  ">Zamknij</button>
+</div>
+
 </body>
 </html>
