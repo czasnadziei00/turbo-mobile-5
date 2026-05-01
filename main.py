@@ -78,6 +78,8 @@ def _to_float(x: Optional[str]) -> Optional[float]:
     return float(x)
   except ValueError:
     return None
+print("=== OCR TEXT ===")
+print(text)
 
 def parse_xtb_text(text: str) -> OcrResponse:
   t = text.replace("\n", " ")
