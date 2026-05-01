@@ -421,6 +421,42 @@ function wczytajTabele() {
 
   sortujPoSygnale();
 }
+  function wczytajTabele() {
+  ...
+}
+
+/* ============================================================
+   SORTOWANIE PO SYGNALE
+   ============================================================ */
+
+function sortujPoSygnale() {
+  const tbody = document.getElementById("tbody");
+  const rows = [...tbody.rows];
+
+  const ranking = {
+    "BUY": 1,
+    "PRAWIE BUY": 2,
+    "CZEKAJ": 3,
+    "CZEKAJ DO": 4,
+    "UWAGA RESET": 5,
+    "RESET": 6
+  };
+
+  rows.sort((a, b) => {
+    const sA = a.cells[4].innerText.trim();
+    const sB = b.cells[4].innerText.trim();
+    return (ranking[sA] || 999) - (ranking[sB] || 999);
+  });
+
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+/* ============================================================
+   START
+   ============================================================ */
+
+wczytajTabele();
+
 
 /* ============================================================
    START
