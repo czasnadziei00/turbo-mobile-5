@@ -122,7 +122,7 @@ async def ocr_endpoint(file: UploadFile = File(...)):
             RSI = parse_blok3(t3)
 
         dane = {
-            "ticker": "KETY",      # na razie na sztywno; można później dodać OCR tickera
+            "ticker": file.filename.split(".")[0].upper(),
             "O": O,
             "H": H,
             "L": L,
