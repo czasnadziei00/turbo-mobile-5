@@ -1,49 +1,37 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="pl">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>TURBO MOBILE 5 — AI Vision</title>
-
+  <meta charset="UTF-8">
+  <title>TURBO MOBILE 5 — XTB + AI Vision</title>
   <style>
-    body { font-family: Arial; background:#f6f7fb; margin:20px; }
-    table { width:100%; border-collapse:collapse; background:white; }
-    th, td { padding:8px 10px; border-bottom:1px solid #eee; font-size:13px; }
-    th { background:#fafafa; font-weight:600; }
-    button { padding:6px 8px; cursor:pointer; border-radius:4px; }
-
-    .signal-buy       { color:#0a7a3a; font-weight:700; }
-    .signal-prawiebuy { color:#7ac70c; font-weight:700; }
-    .signal-czekaj    { color:#555;   font-weight:700; }
-    .signal-czekajdo  { color:#d4a000;font-weight:700; }
-    .signal-uwagarese { color:#ff7f00;font-weight:700; }
-    .signal-reset     { color:#b71c1c;font-weight:700; }
-
-    .trail-active {
-      background-color: #0a4f0a !important;
-      color: white !important;
-    }
+    body { font-family: Arial, sans-serif; background:#111; color:#eee; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; }
+    th, td { border:1px solid #444; padding:4px 6px; text-align:center; }
+    th { background:#222; }
+    .signal-buy { background:#006400; color:#fff; }
+    .signal-prawiebuy { background:#228B22; color:#fff; }
+    .signal-czekaj { background:#333; color:#fff; }
+    .signal-czekajdo { background:#444; color:#fff; }
+    .signal-uwagarese { background:#8B0000; color:#fff; }
+    .signal-reset { background:#FF0000; color:#fff; }
+    .trail-active { outline:2px solid #00FFFF; }
+    .price-input, .entry-input { width:100%; box-sizing:border-box; }
+    button { cursor:pointer; }
   </style>
 </head>
-
 <body>
 
-<button onclick="resetTabeli()" style="margin-bottom:15px;background:#ff4444;color:white;">
-  🔄 RESET (czyści wszystko oprócz ENTRY)
+<h2>TURBO MOBILE 5 — XTB + AI Vision</h2>
+
+<button onclick="resetTable1()" style="background:#b00;color:#fff;padding:6px 10px;">
+  RESET (czyści wszystko oprócz ENTRY)
 </button>
 
-<input 
-  type="file"
-  id="ocr-file-input"
-  accept="image/*"
-  multiple
-  style="display:none;"
-  onchange="wczytajOCRZPlikow(event)"
->
+<!-- UKRYTY INPUT DLA OCR (📎) -->
+<input type="file" id="ocr-file-input" accept="image/*" style="display:none"
+       onchange="wczytajOCRZPlikow(event)">
 
-<h1>TURBO MOBILE 5 — XTB + AI Vision</h1>
-
-<table id="main-table">
+<table>
   <thead>
     <tr>
       <th>📊</th>
@@ -60,28 +48,13 @@
       <th>Akcje</th>
     </tr>
   </thead>
-
   <tbody id="tbody">
-    <tr data-ticker="NEW">
-      <td>📊</td>
-      <td>—</td>
-      <td><input class="price-input"></td>
-      <td><input class="entry-input"></td>
-      <td class="signal-czekaj">CZEKAJ</td>
-      <td>—</td>
-      <td>—</td>
-      <td>—</td>
-      <td>—</td>
-      <td><button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button></td>
-      <td><button onclick="document.getElementById('ocr-file-input').click()">📎</button></td>
-      <td>—</td>
-    </tr>
+    <!-- wiersze dynamiczne -->
   </tbody>
 </table>
 
 <script>
-const OCR_URL = "https://turbo-mobile83.onrender.com/ocr";
-
+const OCR_URL = "https://twoj-backend-ocr-url"; // <- tu swój URL
 /* ============================================================
    REGIONY OCR — 4 bloki: OLHC, INTERWAŁ, RSI, GODZINA
    ============================================================ */
@@ -104,6 +77,7 @@ const REGIONY = {
     BLOK4: R(228, 776, 1124, 50),
   }
 };
+
 /* ============================================================
    OCR — backend region-based
    ============================================================ */
@@ -141,6 +115,8 @@ let aktywnyWiersz = null;
 function dodajLubAktualizujWiersz(d) {
   const tbody = document.getElementById("tbody");
 
+  if (!d || !d.ticker) return;
+
   let w = [...tbody.rows].find(r => r.dataset.ticker === d.ticker);
 
   if (!w) {
@@ -167,7 +143,9 @@ function dodajLubAktualizujWiersz(d) {
     if (d[k] != null) w.dataset[k] = d[k];
   });
 
-  if (d.C != null) w.cells[2].querySelector("input").value = Number(d.C).toFixed(3);
+  if (d.C != null && !isNaN(d.C)) {
+    w.cells[2].querySelector("input").value = Number(d.C).toFixed(3);
+  }
 
   if (w.dataset.interval === "M15" && d.H && d.L) {
     const dol = d.L + (d.H - d.L) * 0.20;
@@ -262,6 +240,7 @@ function ustawTylkoCene(cena) {
   sortujPoSygnale();
   zapiszTabele();
 }
+
 /* ============================================================
    KOLORY SYGNAŁÓW
    ============================================================ */
@@ -329,7 +308,6 @@ function zastosujKorelacjeKGHM(w) {
   w.cells[4].innerText = s;
   kolorujSygnal(w, s);
 }
-
 /* ============================================================
    SYGNAŁ 4.5 PRO
    ============================================================ */
@@ -413,10 +391,14 @@ function wczytajTabele() {
   const data = JSON.parse(localStorage.getItem("tabela") || "[]");
 
   data.forEach(d => {
+    if (!d || !d.ticker) return;
     dodajLubAktualizujWiersz(d);
     const w = [...document.getElementById("tbody").rows]
       .find(r => r.dataset.ticker === d.ticker);
-    if (w && d.widełki) w.cells[5].innerText = d.widełki;
+    if (w && d.widełki && d.widełki.includes("–")) {
+      w.cells[5].innerText = d.widełki;
+      aktualizujSygnał(w);
+    }
   });
 
   sortujPoSygnale();
@@ -447,26 +429,30 @@ function sortujPoSygnale() {
 
   rows.forEach(r => tbody.appendChild(r));
 }
+
+/* ============================================================
+   RESET — czyści wszystko oprócz ENTRY
+   ============================================================ */
+
 function resetTable1() {
   const tbody = document.getElementById("tbody");
 
   [...tbody.rows].forEach(r => {
     if (!r.dataset.ticker) return;
 
-    // czyści price
+    // czyści CENA
     r.cells[2].querySelector("input").value = "";
 
-    // NIE czyści entry
-    // r.cells[3].querySelector("input").value = r.cells[3].querySelector("input").value;
+    // ENTRY zostaje
 
-    // czyści widełki i sygnały
+    // czyści sygnał + widełki + TP
     r.cells[4].innerText = "CZEKAJ";
     r.cells[5].innerText = "—";
     r.cells[6].innerText = "—";
     r.cells[7].innerText = "—";
     r.cells[8].innerText = "—";
 
-    // czyści dataset
+    // czyści dataset (OLHC, MA, RSI, VOL, interval)
     delete r.dataset.O;
     delete r.dataset.H;
     delete r.dataset.L;
@@ -476,6 +462,8 @@ function resetTable1() {
     delete r.dataset.RSI;
     delete r.dataset.VOL;
     delete r.dataset.interval;
+
+    r.classList.remove("trail-active");
   });
 
   zapiszTabele();
