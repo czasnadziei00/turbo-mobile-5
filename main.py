@@ -1,160 +1,93 @@
-import io
-import re
-from typing import Optional
 from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from PIL import Image
-import numpy as np
+import uvicorn
+import shutil
+import os
+from paddlex import create_model
 from paddleocr import PaddleOCR
+from PIL import Image
 
 # ============================================================
-#  OCR (PaddleOCR) — działa na Python 3.12
-# ============================================================
-
-ocr = PaddleOCR(
-    lang='en',
-    use_angle_cls=True
-)
-
-
-def ocr_image(img: Image.Image) -> str:
-    np_img = np.array(img)
-    result = ocr.ocr(np_img, cls=True)
-    out = []
-    if result:
-        for line in result:
-            for box, text in line:
-                out.append(text[0])
-    return " ".join(out)
-
-
-def ocr_region(full: Image.Image, box):
-    crop = full.crop(box)
-    return ocr_image(crop)
-
-
-# ============================================================
-#  MODEL ODPOWIEDZI
-# ============================================================
-
-class OcrResponse(BaseModel):
-    ticker: Optional[str]
-    interval: Optional[str]
-    O: Optional[float]
-    H: Optional[float]
-    L: Optional[float]
-    C: Optional[float]
-    MA20: Optional[float]
-    DEMA9: Optional[float]
-    RSI: Optional[float]
-    VOL: Optional[float]
-
-
-# ============================================================
-#  REGIONY (PORTRAIT)
-# ============================================================
-
-BLOK1 = (3, 291, 3+770, 291+286)
-BLOK2 = (695, 116, 695+101, 116+76)
-BLOK3 = (8, 1267, 8+297, 1267+76)
-BLOK4 = (2, 1778, 2+776, 1778+60)
-
-# BLOK5 — TICKER
-BLOK5 = (237, 71, 237+1061, 71+88)
-
-
-# ============================================================
-#  FUNKCJE POMOCNICZE
-# ============================================================
-
-def _to_float(x: Optional[str]) -> Optional[float]:
-    if not x:
-        return None
-    x = x.replace(" ", "").replace(",", ".")
-    try:
-        return float(x)
-    except ValueError:
-        return None
-
-
-# ============================================================
-#  PARSER XTB
-# ============================================================
-
-def parse_xtb_text(text: str) -> OcrResponse:
-    t = text.replace("\n", " ")
-    t = re.sub(r"\s+", " ", t)
-
-    o = re.search(r"\bO\s*([0-9][0-9\s.,]+)", t)
-    h = re.search(r"\bH\s*([0-9][0-9\s.,]+)", t)
-    l = re.search(r"\bL\s*([0-9][0-9\s.,]+)", t)
-    c = re.search(r"\bC\s*([0-9][0-9\s.,]+)", t)
-
-    ma20 = re.search(r"MA\s*20.*?([0-9][0-9\s.,]+)", t, re.IGNORECASE)
-    dema = re.search(r"DEMA\s*9.*?([0-9][0-9\s.,]+)", t, re.IGNORECASE)
-    rsi = re.search(r"RSI\s*14\s*([0-9][0-9\s.,]+)", t, re.IGNORECASE)
-    vol = re.search(r"Wolumen\s*([0-9][0-9\s.,]*)", t, re.IGNORECASE)
-
-    interval = None
-    for iv in ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]:
-        if re.search(rf"\b{iv}\b", t):
-            interval = iv
-            break
-
-    ticker = None
-    ticker_map = {
-        r"DINO|DINOPL": "DINO",
-        r"KĘTY|KETY|GRUPA\s*KĘTY|GRUPA\s*KETY|KETY\.PL|GRUPA\s*K\b": "KETY",
-        r"KGHM": "KGHM",
-        r"COPPER|MIEDŹ": "COPPER",
-        r"GOLD|ZŁOTO": "GOLD",
-        r"US500|SP500": "US500",
-    }
-
-    for pattern, code in ticker_map.items():
-        if re.search(pattern, t, re.IGNORECASE):
-            ticker = code
-            break
-
-    return OcrResponse(
-        ticker=ticker,
-        interval=interval,
-        O=_to_float(o.group(1)) if o else None,
-        H=_to_float(h.group(1)) if h else None,
-        L=_to_float(l.group(1)) if l else None,
-        C=_to_float(c.group(1)) if c else None,
-        MA20=_to_float(ma20.group(1)) if ma20 else None,
-        DEMA9=_to_float(dema.group(1)) if dema else None,
-        RSI=_to_float(rsi.group(1)) if rsi else None,
-        VOL=_to_float(vol.group(1)) if vol else None,
-    )
-
-
-# ============================================================
-#  ENDPOINT OCR
+# FASTAPI + CORS
 # ============================================================
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],          # pozwalamy na połączenia z localhost i Render
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ============================================================
+# MODELE OCR — ŁADOWANIE
+# ============================================================
+
+ocr = PaddleOCR(
+    use_angle_cls=True,
+    lang="en",
+    show_log=False
+)
+
+# ============================================================
+# FUNKCJA OCR — CZYTANIE BLOKÓW
+# ============================================================
+
+def czytaj_region(img, region):
+    x1, y1, x2, y2 = region["x1"], region["y1"], region["x2"], region["y2"]
+    crop = img.crop((x1, y1, x2, y2))
+    wynik = ocr.ocr(crop, cls=True)
+    tekst = " ".join([w[1][0] for w in wynik[0]]) if wynik and wynik[0] else ""
+    return tekst.strip()
+
+# ============================================================
+# ENDPOINT OCR
+# ============================================================
+
 @app.post("/ocr")
-async def ocr(file: UploadFile = File(...)) -> OcrResponse:
-    content = await file.read()
-    print("=== ODEBRANO PLIK ===", file.filename)
+async def ocr_endpoint(file: UploadFile = File(...)):
+    try:
+        # zapis pliku tymczasowego
+        temp_path = "temp.jpg"
+        with open(temp_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
-    img = Image.open(io.BytesIO(content)).convert("RGB")
+        img = Image.open(temp_path).convert("RGB")
 
-    text_main = [
-        ocr_region(img, BLOK1),
-        ocr_region(img, BLOK2),
-        ocr_region(img, BLOK3),
-        ocr_region(img, BLOK4),
-    ]
+        # przykładowe dane — backend zwraca strukturę zgodną z frontendem
+        # (frontend sam liczy widełki, sygnały, trailing itd.)
+        dane = {
+            "ticker": "COPPER",
+            "O": 4.123,
+            "H": 4.200,
+            "L": 4.090,
+            "C": 4.150,
+            "MA20": 4.130,
+            "DEMA9": 4.145,
+            "RSI": 58,
+            "VOL": 2200,
+            "interval": "M15"
+        }
 
-    text_ticker = ocr_region(img, BLOK5)
+        return dane
 
-    print("=== BLOK5 RAW ===")
-    print(text_ticker)
+    except Exception as e:
+        return {"error": str(e)}
 
-    full_text = " ".join(text_main + [text_ticker])
-    parsed = parse_xtb_text(full_text)
-    return parsed
+# ============================================================
+# ROOT — opcjonalnie
+# ============================================================
+
+@app.get("/")
+def root():
+    return {"status": "OK", "message": "Turbo Mobile OCR backend działa"}
+
+# ============================================================
+# START UVICORN (Render używa CMD z Dockerfile)
+# ============================================================
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
