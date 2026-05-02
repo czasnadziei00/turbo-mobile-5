@@ -57,6 +57,186 @@
 
 <script>
 /* ============================================================
+   REGIONY OCR (TAKIE SAME JAK W BACKENDZIE)
+   ============================================================ */
+function R(x1, y1, w, h) {
+  return { x1, y1, x2: x1 + w, y2: y1 + h };
+}
+
+const REGIONY = {
+  portrait: {
+    BLOK1: R(3, 291, 770, 286),
+    BLOK2: R(695, 116, 101, 76),
+    BLOK3: R(8, 1267, 297, 76),
+    BLOK4: R(2, 1778, 776, 60),
+  },
+  landscape: {
+    BLOK1: R(237, 149, 1532, 217),
+    BLOK2: R(86, 702, 121, 90),
+    BLOK3: R(106, 700, 108, 85),
+    BLOK4: R(228, 776, 1124, 50),
+  }
+};
+
+function detectOrientation(img) {
+  return img.height >= img.width ? "portrait" : "landscape";
+}
+
+function cropRegion(img, region) {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+
+  const w = region.x2 - region.x1;
+  const h = region.y2 - region.y1;
+
+  canvas.width = w;
+  canvas.height = h;
+
+  ctx.drawImage(img, region.x1, region.y1, w, h, 0, 0, w, h);
+
+  return canvas;
+}
+
+async function ocrRegion(canvas) {
+  const { data: { text } } = await Tesseract.recognize(
+    canvas,
+    'eng',
+    {
+      tessedit_char_whitelist: '0123456789.,ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+      preserve_interword_spaces: 1
+    }
+  );
+  return text.trim();
+}
+
+/* ============================================================
+   START OCR Z REGIONAMI
+   ============================================================ */
+async function startOCR(file) {
+  const img = new Image();
+  img.src = URL.createObjectURL(file);
+  await img.decode();
+
+  const orient = detectOrientation(img);
+  const reg = REGIONY[orient];
+
+  const b1 = await ocrRegion(cropRegion(img, reg.BLOK1));
+  const b2 = await ocrRegion(cropRegion(img, reg.BLOK2));
+  const b3 = await ocrRegion(cropRegion(img, reg.BLOK3));
+
+  const parsed = parseOCR(b1, b2, b3);
+
+  dodajLubAktualizujWiersz(parsed);
+  zapiszTabele();
+}
+
+function toFloat(s) {
+  s = s.replace(" ", "").replace(",", ".");
+  const m = s.match(/[-+]?\d+(\.\d+)?/);
+  return m ? parseFloat(m[0]) : null;
+}
+
+function parseOCR(b1, b2, b3) {
+  let O = toFloat(b1.match(/O1?\s*([\d,\.]+)/)?.[1] || "");
+  let H = toFloat(b1.match(/H1?\s*([\d,\.]+)/)?.[1] || "");
+  let L = toFloat(b1.match(/L1?\s*([\d,\.]+)/)?.[1] || "");
+  let C = toFloat(b1.match(/C1?\s*([\d,\.]+)/)?.[1] || "");
+  let VOL = parseInt(toFloat(b1.match(/Wolumen\s*([\d,\.]+)/i)?.[1] || 0));
+
+  let MA20 = toFloat(b2.match(/MA\s*20.*?([\d,\.]+)/i)?.[1] || "");
+  let DEMA9 = toFloat(b2.match(/DEMA\s*9.*?([\d,\.]+)/i)?.[1] || "");
+
+  let RSI = toFloat(b3.match(/RSI\s*14?\s*([\d,\.]+)/i)?.[1] || "");
+
+  return {
+    ticker: "???",
+    O, H, L, C,
+    MA20, DEMA9,
+    RSI, VOL,
+    interval: "M15"
+  };
+}
+/* ============================================================
+   TWORZENIE / AKTUALIZACJA WIERSZA
+   ============================================================ */
+function dodajLubAktualizujWiersz(d) {
+  const tbody = document.getElementById("tbody");
+
+  let w = [...tbody.rows].find(r => r.dataset.ticker === d.ticker);
+
+  if (!w) {
+    w = tbody.insertRow(-1);
+    w.dataset.ticker = d.ticker;
+
+    w.insertCell(0).innerText = "📊";
+    w.insertCell(1).innerText = d.ticker;
+    w.insertCell(2).innerHTML = `<input class="price-input" oninput="aktualizujSygnał(this.closest('tr'));zapiszTabele()">`;
+    w.insertCell(3).innerHTML = `<input class="entry-input" oninput="zapiszTabele()">`;
+    w.insertCell(4).innerText = "CZEKAJ";
+    w.insertCell(5).innerText = "—";
+    w.insertCell(6).innerText = "—";
+    w.insertCell(7).innerText = "—";
+    w.insertCell(8).innerText = "—";
+    w.insertCell(9).innerHTML  = `<button onclick="komentarz45PRO(this.closest('tr'))">🎤</button>`;
+    w.insertCell(10).innerHTML = `<button onclick="document.getElementById('ocr-file-input').click()">📎</button>`;
+    w.insertCell(11).innerHTML = `<button onclick="usunWiersz(this);zapiszTabele()">🗑 Usuń</button>`;
+  }
+
+  ["O","H","L","C","MA20","DEMA9","RSI","VOL"].forEach(k => {
+    if (d[k] != null) w.dataset[k] = d[k];
+  });
+
+  if (d.C != null) {
+    w.cells[2].querySelector("input").value = Number(d.C).toFixed(3);
+  }
+
+  if (d.H && d.L) {
+    const dol = d.L + (d.H - d.L) * 0.20;
+    const gor = d.L + (d.H - d.L) * 0.35;
+    w.cells[5].innerText = dol.toFixed(3) + "–" + gor.toFixed(3);
+  }
+
+  aktualizujSygnał(w);
+  sortujPoSygnale();
+}
+
+/* ============================================================
+   SYGNAŁ 4.5 PRO
+   ============================================================ */
+function aktualizujSygnał(w) {
+  const cena = parseFloat(w.cells[2].querySelector("input").value);
+  if (isNaN(cena)) return;
+
+  const [dol, gor] = w.cells[5].innerText.split("–").map(parseFloat);
+
+  const L     = parseFloat(w.dataset.L     || 0);
+  const MA20  = parseFloat(w.dataset.MA20  || 0);
+  const DEMA9 = parseFloat(w.dataset.DEMA9 || 0);
+  const RSI   = parseFloat(w.dataset.RSI   || 0);
+  const VOL   = parseFloat(w.dataset.VOL   || 0);
+
+  const momentum = (DEMA9 && cena > DEMA9) ? "MOCNE" : "SŁABE";
+  const bias     = (MA20 && cena > MA20) ? "UP" : "DOWN";
+
+  let rsiPower = RSI >= 55 ? "MOCNE" : RSI >= 50 ? "OK" : "SŁABE";
+  let volPower = VOL >= 1500 ? "MOCNE" : VOL >= 500 ? "OK" : "SŁABE";
+
+  let s = "CZEKAJ";
+
+  if (cena < dol) s = "CZEKAJ DO";
+  if (cena >= dol && cena <= gor && (momentum === "SŁABE" || rsiPower === "SŁABE")) s = "PRAWIE BUY";
+  if (cena >= dol && cena <= gor && momentum === "MOCNE" && bias === "UP" &&
+      (rsiPower !== "SŁABE") && (volPower !== "SŁABE")) s = "BUY";
+  if (cena > gor) s = "CZEKAJ";
+  if (cena < dol * 0.995 && momentum === "SŁABE" && rsiPower === "SŁABE") s = "UWAGA RESET";
+  if (cena < L && momentum === "SŁABE" && rsiPower === "SŁABE") s = "RESET";
+
+  w.cells[4].innerText = s;
+  kolorujSygnal(w, s);
+  aktualizujTrailing(w);
+}
+
+/* ============================================================
    KOLORY SYGNAŁÓW
    ============================================================ */
 function kolorujSygnal(w, s) {
@@ -90,149 +270,6 @@ function aktualizujTrailing(w) {
 }
 
 /* ============================================================
-   LOCALSTORAGE
-   ============================================================ */
-function zapiszTabele() {
-  const tbody = document.getElementById("tbody");
-  const data = [...tbody.rows]
-    .filter(r => r.dataset.ticker)
-    .map(r => ({
-      ticker: r.dataset.ticker,
-      price: r.cells[2].querySelector("input").value,
-      entry: r.cells[3].querySelector("input").value,
-      widełki: r.cells[5].innerText,
-      O: r.dataset.O,
-      H: r.dataset.H,
-      L: r.dataset.L,
-      C: r.dataset.C,
-      MA20: r.dataset.MA20,
-      DEMA9: r.dataset.DEMA9,
-      RSI: r.dataset.RSI,
-      VOL: r.dataset.VOL,
-      interval: r.dataset.interval
-    }));
-
-  localStorage.setItem("tabela", JSON.stringify(data));
-}
-
-function wczytajTabele() {
-  const data = JSON.parse(localStorage.getItem("tabela") || "[]");
-
-  data.forEach(d => {
-    if (!d || !d.ticker) return;
-    dodajLubAktualizujWiersz(d);
-    const w = [...document.getElementById("tbody").rows]
-      .find(r => r.dataset.ticker === d.ticker);
-    if (w && d.widełki && d.widełki.includes("–")) {
-      w.cells[5].innerText = d.widełki;
-      aktualizujSygnał(w);
-    }
-  });
-
-  sortujPoSygnale();
-}
-
-/* ============================================================
-   RESET
-   ============================================================ */
-function resetTable1() {
-  const tbody = document.getElementById("tbody");
-
-  [...tbody.rows].forEach(r => {
-    if (!r.dataset.ticker) return;
-
-    r.cells[2].querySelector("input").value = "";
-
-    r.cells[4].innerText = "CZEKAJ";
-    r.cells[5].innerText = "—";
-    r.cells[6].innerText = "—";
-    r.cells[7].innerText = "—";
-    r.cells[8].innerText = "—";
-
-    delete r.dataset.O;
-    delete r.dataset.H;
-    delete r.dataset.L;
-    delete r.dataset.C;
-    delete r.dataset.MA20;
-    delete r.dataset.DEMA9;
-    delete r.dataset.RSI;
-    delete r.dataset.VOL;
-    delete r.dataset.interval;
-
-    r.classList.remove("trail-active");
-  });
-
-  zapiszTabele();
-}
-/* ============================================================
-   KOMENTARZ 4.5 PRO
-   ============================================================ */
-function komentarz45PRO(w) {
-  const t = w.dataset.ticker || "";
-
-  const O = parseFloat(w.dataset.O || 0);
-  const H = parseFloat(w.dataset.H || 0);
-  const L = parseFloat(w.dataset.L || 0);
-  const C = parseFloat(w.dataset.C || 0);
-
-  const MA20  = parseFloat(w.dataset.MA20  || 0);
-  const EMA20 = parseFloat(w.dataset.EMA20 || 0);
-  const DEMA9 = parseFloat(w.dataset.DEMA9 || 0);
-  const RSI   = parseFloat(w.dataset.RSI   || 0);
-  const VOL   = parseFloat(w.dataset.VOL   || 0);
-
-  const widełki = w.cells[5].innerText || "—";
-  const sygnał  = w.cells[4].innerText || "—";
-
-  let txt = `⭐ ANALIZA 4.5 PRO — ${t}\n\n`;
-
-  txt += `1. STRUKTURA M15\nO=${O}\nH=${H}\nL=${L}\nC=${C}\n\n`;
-  txt += `2. MOMENTUM\nDEMA9=${DEMA9} → ${C > DEMA9 ? "impuls NAD" : "impuls POD"}\n\n`;
-  txt += `3. TREND\nMA20=${MA20} → ${C > MA20 ? "UP" : "DOWN"}\nEMA20=${EMA20} → ${C > EMA20 ? "UP" : "DOWN"}\n\n`;
-  txt += `4. RSI\nRSI=${RSI}\n\n`;
-  txt += `5. VOLUME\nVOL=${VOL}\n\n`;
-  txt += `6. WIDEŁKI\n${widełki}\n\n`;
-  txt += `7. SYGNAŁ\n${sygnał}\n\n`;
-
-  txt += `⭐ INTERPRETACJA\n`;
-  if (sygnał === "RESET") txt += `🟥 Pełny RESET — brak impulsu i rytmu.\n`;
-  else if (sygnał === "PRAWIE BUY") txt += `🟧 PRAWIE BUY — struktura OK, impuls słaby.\n`;
-  else if (sygnał === "BUY") txt += `🟩 BUY — impuls + rytm + fundament.\n`;
-  else txt += `CZEKAJ — brak warunków do wejścia.\n`;
-
-  if (t === "KGHM" && lastCopper) {
-    const cH = lastCopper.H;
-    const cL = lastCopper.L;
-    const cC = lastCopper.C;
-    const cMA = lastCopper.MA20;
-    const cD9 = lastCopper.DEMA9;
-    const cRSI = lastCopper.RSI;
-
-    txt += `\n⭐ KORELACJA Z COPPER\n`;
-    txt += `Copper C=${cC}\nMA20=${cMA}, DEMA9=${cD9}, RSI=${cRSI}\n\n`;
-
-    if (cC < cL) txt += `🟥 Copper = RESET → ciągnie KGHM w dół\n`;
-    else if (cC > cL + (cH - cL) * 0.20 && cC < cL + (cH - cL) * 0.35)
-      txt += `🟩 Copper = BUY zone → wspiera KGHM\n`;
-    else txt += `🟧 Copper = neutralny\n`;
-  }
-
-  pokazPopupKomentarza(txt);
-}
-
-/* ============================================================
-   POPUP KOMENTARZA
-   ============================================================ */
-function pokazPopupKomentarza(txt) {
-  document.getElementById("popup-text").innerText = txt;
-  document.getElementById("popup-komentarz").style.display = "block";
-}
-
-function zamknijPopupKomentarza() {
-  document.getElementById("popup-komentarz").style.display = "none";
-}
-
-/* ============================================================
    SORTOWANIE
    ============================================================ */
 function sortujPoSygnale() {
@@ -256,11 +293,37 @@ function sortujPoSygnale() {
 
   rows.forEach(r => tbody.appendChild(r));
 }
+
+/* ============================================================
+   POPUP
+   ============================================================ */
+function komentarz45PRO(w) {
+  const t = w.dataset.ticker || "";
+  const O = w.dataset.O || "-";
+  const H = w.dataset.H || "-";
+  const L = w.dataset.L || "-";
+  const C = w.dataset.C || "-";
+  const MA20 = w.dataset.MA20 || "-";
+  const DEMA9 = w.dataset.DEMA9 || "-";
+  const RSI = w.dataset.RSI || "-";
+  const VOL = w.dataset.VOL || "-";
+  const widełki = w.cells[5].innerText;
+  const sygnał = w.cells[4].innerText;
+
+  let txt = `⭐ ANALIZA 4.5 PRO — ${t}\n\n`;
+  txt += `O=${O}\nH=${H}\nL=${L}\nC=${C}\n\n`;
+  txt += `MA20=${MA20}\nDEMA9=${DEMA9}\nRSI=${RSI}\nVOL=${VOL}\n\n`;
+  txt += `Widełki: ${widełki}\nSygnał: ${sygnał}\n`;
+
+  document.getElementById("popup-text").innerText = txt;
+  document.getElementById("popup-komentarz").style.display = "block";
+}
+
+function zamknijPopupKomentarza() {
+  document.getElementById("popup-komentarz").style.display = "none";
+}
 </script>
 
-<!-- ============================================================
-     POPUP HTML
-     ============================================================ -->
 <div id="popup-komentarz" style="
   display:none;
   position:fixed;
