@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# Install system dependencies
+# Install system dependencies for PaddleOCR + OpenCV
 RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libsm6 \
@@ -8,22 +8,25 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libgl1 \
     libgomp1 \
+    libstdc++6 \
+    libjpeg-dev \
+    zlib1g \
+    libpng-dev \
+    libtiff5 \
+    libopenblas-dev \
+    libatlas-base-dev \
+    liblapack-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements
 COPY requirements.txt .
 
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
 COPY . .
 
-# Expose port
 EXPOSE 8000
 
-# Start server
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
