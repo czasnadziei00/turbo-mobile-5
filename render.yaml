@@ -1,9 +1,8 @@
 services:
   - type: web
-    name: turbo-mobile-5-backend
-    env: python
-    region: frankfurt
+    name: turbo-mobile-backend
+    env: docker
     plan: free
-    rootDir: .
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
