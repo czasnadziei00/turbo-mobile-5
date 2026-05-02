@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# Install system dependencies for PaddleOCR + OpenCV
+# Install system dependencies for PaddleOCR + OpenCV (Debian Trixie 2026)
 RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libsm6 \
@@ -12,10 +12,10 @@ RUN apt-get update && apt-get install -y \
     libjpeg-dev \
     zlib1g \
     libpng-dev \
-    libtiff5 \
+    libtiff6 \
     libopenblas-dev \
-    libatlas-base-dev \
-    liblapack-dev \
+    libatlas3-base \
+    liblapack3 \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
