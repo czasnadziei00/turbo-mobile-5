@@ -20,6 +20,9 @@
     button { cursor:pointer; }
     .reset-btn { background:#b00; color:#fff; padding:6px 10px; }
   </style>
+
+  <!-- TESSERACT OCR -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
 
@@ -53,192 +56,6 @@
 </table>
 
 <script>
-/* ============================================================
-   BACKEND OCR
-   ============================================================ */
-const OCR_URL = "https://turbo-mobile83.onrender.com/ocr";
-
-/* ============================================================
-   REGIONY OCR
-   ============================================================ */
-function R(x1, y1, w, h) {
-  return { x1, y1, x2: x1 + w, y2: y1 + h };
-}
-
-const REGIONY = {
-  portrait: {
-    BLOK1: R(3, 291, 770, 286),
-    BLOK2: R(695, 116, 101, 76),
-    BLOK3: R(8, 1267, 297, 76),
-    BLOK4: R(2, 1778, 776, 60),
-  },
-  landscape: {
-    BLOK1: R(237, 149, 1532, 217),
-    BLOK2: R(86, 702, 121, 90),
-    BLOK3: R(106, 700, 108, 85),
-    BLOK4: R(228, 776, 1124, 50),
-  }
-};
-/* ============================================================
-   OCR
-   ============================================================ */
-async function wczytajOCRZPlikow(event) {
-  const pliki = event.target.files;
-  if (!pliki || pliki.length === 0) return;
-
-  for (const plik of pliki) await startOCR(plik);
-  event.target.value = "";
-}
-
-async function startOCR(file) {
-  try {
-    const form = new FormData();
-    form.append("file", file);
-
-    const res = await fetch(OCR_URL, { method: "POST", body: form });
-    const d = await res.json();
-
-    zapiszDaneDoKorelacji(d);
-    dodajLubAktualizujWiersz(d);
-    zapiszTabele();
-  } catch (e) {
-    alert("Błąd OCR backendu");
-  }
-}
-
-/* ============================================================
-   KORELACJA KGHM ↔ COPPER
-   ============================================================ */
-let lastCopper = null;
-let lastKGHM = null;
-
-function zapiszDaneDoKorelacji(d) {
-  if (d.ticker === "COPPER") lastCopper = d;
-  if (d.ticker === "KGHM")   lastKGHM   = d;
-}
-
-function zastosujKorelacjeKGHM(w) {
-  if (!lastCopper || w.dataset.ticker !== "KGHM") return;
-
-  const cH = lastCopper.H;
-  const cL = lastCopper.L;
-  const cC = lastCopper.C;
-  const cMA = lastCopper.MA20;
-
-  let s = w.cells[4].innerText;
-
-  if (cC < cL) s = "RESET";
-
-  const buyZone = cC > cL + (cH - cL) * 0.20 && cC < cL + (cH - cL) * 0.35;
-  if (buyZone && s === "PRAWIE BUY") s = "BUY";
-
-  if (cMA && cC > cMA && s === "CZEKAJ") s = "PRAWIE BUY";
-
-  w.cells[4].innerText = s;
-  kolorujSygnal(w, s);
-}
-
-/* ============================================================
-   TWORZENIE / AKTUALIZACJA WIERSZA
-   ============================================================ */
-let aktywnyWiersz = null;
-
-function dodajLubAktualizujWiersz(d) {
-  const tbody = document.getElementById("tbody");
-
-  if (!d || !d.ticker) return;
-
-  let w = [...tbody.rows].find(r => r.dataset.ticker === d.ticker);
-
-  if (!w) {
-    w = tbody.insertRow(-1);
-    w.dataset.ticker = d.ticker;
-
-    w.insertCell(0).innerText = "📊";
-    w.insertCell(1).innerText = d.ticker;
-    w.insertCell(2).innerHTML = `<input class="price-input" oninput="aktualizujSygnał(this.closest('tr'));zapiszTabele()">`;
-    w.insertCell(3).innerHTML = `<input class="entry-input" oninput="zapiszTabele()">`;
-    w.insertCell(4).innerText = "CZEKAJ";
-    w.insertCell(5).innerText = "—";
-    w.insertCell(6).innerText = "—";
-    w.insertCell(7).innerText = "—";
-    w.insertCell(8).innerText = "—";
-    w.insertCell(9).innerHTML  = `<button onclick="uruchomMikrofon(this.closest('tr'))">🎤</button>`;
-    w.insertCell(10).innerHTML = `<button onclick="document.getElementById('ocr-file-input').click()">📎</button>`;
-    w.insertCell(11).innerHTML = `<button onclick="usunWiersz(this);zapiszTabele()">🗑 Usuń</button>`;
-  }
-
-  if (d.interval) w.dataset.interval = d.interval;
-
-  ["O","H","L","C","MA20","DEMA9","RSI","VOL","ASK","BID"].forEach(k => {
-    if (d[k] != null) w.dataset[k] = d[k];
-  });
-
-  if (d.C != null && !isNaN(d.C)) {
-    w.cells[2].querySelector("input").value = Number(d.C).toFixed(3);
-  }
-
-  if (w.dataset.interval === "M15" && d.H && d.L) {
-    const dol = d.L + (d.H - d.L) * 0.20;
-    const gor = d.L + (d.H - d.L) * 0.35;
-    w.cells[5].innerText = dol.toFixed(3) + "–" + gor.toFixed(3);
-  }
-
-  aktualizujSygnał(w);
-  zastosujKorelacjeKGHM(w);
-  sortujPoSygnale();
-}
-/* ============================================================
-   SYGNAŁ 4.5 PRO
-   ============================================================ */
-function aktualizujSygnał(w) {
-  const cena = parseFloat(w.cells[2].querySelector("input").value);
-  const cell = w.cells[4];
-
-  if (!w.cells[5].innerText.includes("–") || isNaN(cena)) return;
-
-  const [dol, gor] = w.cells[5].innerText.split("–").map(parseFloat);
-
-  const L     = parseFloat(w.dataset.L     || 0);
-  const MA20  = parseFloat(w.dataset.MA20  || 0);
-  const DEMA9 = parseFloat(w.dataset.DEMA9 || 0);
-  const RSI   = parseFloat(w.dataset.RSI   || 0);
-  const VOL   = parseFloat(w.dataset.VOL   || 0);
-
-  const momentum = (DEMA9 && cena > DEMA9) ? "MOCNE" : "SŁABE";
-  const bias     = (MA20 && cena > MA20) ? "UP" : "DOWN";
-
-  let rsiPower = RSI >= 55 ? "MOCNE" : RSI >= 50 ? "OK" : "SŁABE";
-  let volPower = VOL >= 1500 ? "MOCNE" : VOL >= 500 ? "OK" : "SŁABE";
-
-  let s = "CZEKAJ";
-
-  if (cena < dol) s = "CZEKAJ DO";
-
-  if (cena >= dol && cena <= gor && (momentum === "SŁABE" || rsiPower === "SŁABE"))
-    s = "PRAWIE BUY";
-
-  if (
-    cena >= dol && cena <= gor &&
-    momentum === "MOCNE" &&
-    bias === "UP" &&
-    (rsiPower === "OK" || rsiPower === "MOCNE") &&
-    (volPower === "OK" || volPower === "MOCNE")
-  ) s = "BUY";
-
-  if (cena > gor) s = "CZEKAJ";
-
-  if (cena < dol * 0.995 && momentum === "SŁABE" && rsiPower === "SŁABE")
-    s = "UWAGA RESET";
-
-  if (cena < L && momentum === "SŁABE" && rsiPower === "SŁABE")
-    s = "RESET";
-
-  aktualizujTrailing(w);
-  cell.innerText = s;
-  kolorujSygnal(w, s);
-}
-
 /* ============================================================
    KOLORY SYGNAŁÓW
    ============================================================ */
@@ -440,11 +257,10 @@ function sortujPoSygnale() {
   rows.forEach(r => tbody.appendChild(r));
 }
 </script>
-  
-/* ============================================================
-   POPUP HTML
-   ============================================================ */
 
+<!-- ============================================================
+     POPUP HTML
+     ============================================================ -->
 <div id="popup-komentarz" style="
   display:none;
   position:fixed;
@@ -454,7 +270,7 @@ function sortujPoSygnale() {
   backdrop-filter:blur(4px);
   z-index:9999;
 ">
-  <div style="
+  <div id="popup-text" style="
     background:#222;
     color:#eee;
     padding:20px;
@@ -464,7 +280,7 @@ function sortujPoSygnale() {
     border:1px solid #555;
     white-space:pre-wrap;
     font-family:monospace;
-  " id="popup-text"></div>
+  "></div>
 
   <button onclick="zamknijPopupKomentarza()" style="
     display:block;
